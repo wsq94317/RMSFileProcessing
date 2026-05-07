@@ -114,19 +114,12 @@ def result(run_id: str):
     if not summary_path.exists():
         abort(404)
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    files = [
-        ("Final Excel", "rms_absolute_master_merged.xlsx"),
-        ("Final CSV", "rms_absolute_master_merged.csv"),
-        ("All results ZIP", f"rms_import_results_{run_id}.zip"),
-        ("Payment Type blank audit", "audit_payment_type_blank.csv"),
-        ("Expedia payment unmatched audit", "audit_expedia_payment_unmatched.csv"),
-        ("Arrival note not matched audit", "audit_arrival_remark_not_matched.csv"),
-        ("Active/Cancel unmatched audit", "audit_active_cancel_unmatched.csv"),
-        ("Active/Cancel Arrival fallback audit", "audit_active_cancel_arrival_fallback.csv"),
-        ("Ctrip source fixed audit", "audit_business_source_ctrip_fixed.csv"),
-        ("Summary JSON", "rms_absolute_master_summary.json"),
-    ]
-    return render_template("result.html", run_id=run_id, summary=summary, files=files)
+    return render_template(
+        "result.html",
+        run_id=run_id,
+        summary=summary,
+        final_excel="rms_absolute_master_merged.xlsx",
+    )
 
 
 @app.get("/download/<run_id>/<path:filename>")

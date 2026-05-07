@@ -184,6 +184,19 @@ button:hover {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.downloads.single {
+  grid-template-columns: minmax(220px, 360px);
+}
+
+.primary-download {
+  background: var(--accent);
+  color: #ffffff !important;
+}
+
+.primary-download:hover {
+  background: var(--accent-dark);
+}
+
 pre {
   overflow: auto;
   background: #0f1720;

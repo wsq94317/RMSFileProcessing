@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,24 +11,22 @@
     <section class="panel">
       <div class="header">
         <div>
-          <h1>生成完成</h1>
-          <p>任务编号：{{ run_id }}</p>
+          <h1>Files Ready</h1>
+          <p>Run ID: {{ run_id }}</p>
         </div>
-        <a class="secondary" href="{{ url_for('index') }}">重新上传</a>
+        <a class="secondary" href="{{ url_for('index') }}">Upload Again</a>
       </div>
 
       <div class="summary">
-        <div><span>主表输入</span><strong>{{ summary.master_rows_input }}</strong></div>
-        <div><span>主表输出</span><strong>{{ summary.master_rows_output }}</strong></div>
-        <div><span>Note 有内容</span><strong>{{ summary.arrival_exact_name_date_rows_with_remark }}</strong></div>
-        <div><span>Expedia 付款匹配</span><strong>{{ summary.expedia_payment_rows_matched }}</strong></div>
+        <div><span>Input Rows</span><strong>{{ summary.master_rows_input }}</strong></div>
+        <div><span>Output Rows</span><strong>{{ summary.master_rows_output }}</strong></div>
+        <div><span>Rows With Notes</span><strong>{{ summary.arrival_exact_name_date_rows_with_remark }}</strong></div>
+        <div><span>Expedia Payments Matched</span><strong>{{ summary.expedia_payment_rows_matched }}</strong></div>
       </div>
 
-      <h2>下载</h2>
-      <div class="downloads">
-        {% for label, filename in files %}
-          <a href="{{ url_for('download', run_id=run_id, filename=filename) }}">{{ label }}</a>
-        {% endfor %}
+      <h2>Download</h2>
+      <div class="downloads single">
+        <a class="primary-download" href="{{ url_for('download', run_id=run_id, filename=final_excel) }}">Download Final Excel</a>
       </div>
 
       <h2>Active/Cancel</h2>
