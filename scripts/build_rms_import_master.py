@@ -146,6 +146,8 @@ def read_siteminder(paths: list[Path] | None = None) -> pd.DataFrame:
     grouped_rows = []
     for booking_ref, group in sm.groupby("Booking reference", dropna=False):
         statuses = [clean_line(v) for v in group["Booking status"].tolist() if clean_line(v)]
+        channels = [clean_line(v) for v in group["Channel"].tolist() if clean_line(v)]
+        affiliated_channels = [clean_line(v) for v in group["Affiliated Channel"].tolist() if clean_line(v)]
         non_cancelled = [s for s in statuses if s.upper() != "CANCELLED"]
         if not clean_line(booking_ref):
             continue
@@ -153,6 +155,8 @@ def read_siteminder(paths: list[Path] | None = None) -> pd.DataFrame:
             {
                 "SM Booking reference": clean_line(booking_ref),
                 "SM Statuses": "|".join(sorted(set(statuses))),
+                "SM Channels": "|".join(sorted(set(channels))),
+                "SM Affiliated Channels": "|".join(sorted(set(affiliated_channels))),
                 "Active/Cancel": "Active" if non_cancelled else "Cancel",
                 "SM Matched Row Count": int(len(group)),
             }
@@ -214,6 +218,18 @@ def payment_method(row: pd.Series) -> str:
     return ""
 
 
+def is_ctrip_siteminder(row: pd.Series) -> bool:
+    text = normalize_source(
+        " ".join(
+            [
+                clean_line(row.get("SM Channels", "")),
+                clean_line(row.get("SM Affiliated Channels", "")),
+            ]
+        )
+    )
+    return any(token in text for token in ["ctrip", "trip com"])
+
+
 def build_master(
     master_file: Path = MASTER_FILE,
     arrival_file: Path = ARRIVAL_FILE,
@@ -251,6 +267,15 @@ def build_master(
         right_on="Expedia Reservation ID",
         validate="many_to_one",
     )
+    source_was_blank = merged["Business Source"].fillna("").map(clean_line).eq("")
+    ctrip_from_siteminder = source_was_blank & merged.apply(is_ctrip_siteminder, axis=1)
+    merged.loc[ctrip_from_siteminder, "Business Source"] = "Ctrip"
+
+    has_arrival = merged["ASI Arrival Match Count"].notna()
+    missing_siteminder_status = merged["Active/Cancel"].fillna("").eq("")
+    merged.loc[missing_siteminder_status & has_arrival, "Active/Cancel"] = "Active"
+    merged.loc[missing_siteminder_status & ~has_arrival, "Active/Cancel"] = "Cancel"
+
     merged["Payment Type"] = merged.apply(payment_method, axis=1)
     merged["Note"] = merged["ASI Arrival Remark"].fillna("")
     merged["Active/Cancel"] = merged["Active/Cancel"].fillna("")
@@ -259,7 +284,6 @@ def build_master(
         merged["_master_guest_name_exact"] + "|" + merged["_checkin_date"] + "|" + merged["_checkout_date"]
     )
     merged["ASI Arrival Remark Match Status"] = "not_matched"
-    has_arrival = merged["ASI Arrival Match Count"].notna()
     merged.loc[has_arrival, "ASI Arrival Remark Match Status"] = "matched_exact_name_dates"
     merged.loc[has_arrival & merged["ASI Arrival Remark"].fillna("").eq(""), "ASI Arrival Remark Match Status"] = (
         "matched_exact_name_dates_no_remark"
@@ -272,6 +296,10 @@ def build_master(
     is_expedia = merged["Business Source"].map(normalize_source).eq("expedia")
     merged.loc[is_expedia, "Expedia Payment Match Status"] = "not_matched"
     merged.loc[is_expedia & merged["Expedia Payment Type"].fillna("").ne(""), "Expedia Payment Match Status"] = "matched"
+    merged["Business Source Fix Status"] = ""
+    merged.loc[ctrip_from_siteminder, "Business Source Fix Status"] = "blank_source_set_to_ctrip_from_siteminder"
+    merged["Active/Cancel Source"] = "Arrival List fallback"
+    merged.loc[merged.get("SM Booking reference", pd.Series("", index=merged.index)).fillna("").ne(""), "Active/Cancel Source"] = "SiteMinder"
 
     if len(merged) != master_original_rows:
         raise RuntimeError(f"Output row count changed from {master_original_rows} to {len(merged)}")
@@ -295,6 +323,8 @@ def build_master(
         ),
         "siteminder_booking_refs": int(len(sm)),
         "active_cancel_counts": output["Active/Cancel"].value_counts(dropna=False).to_dict(),
+        "active_cancel_source_counts": merged["Active/Cancel Source"].value_counts(dropna=False).to_dict(),
+        "business_source_blank_set_to_ctrip_from_siteminder": int(ctrip_from_siteminder.sum()),
         "expedia_rows": int(is_expedia.sum()),
         "expedia_payment_rows_matched": int(merged["Expedia Payment Match Status"].eq("matched").sum()),
         "payment_type_counts": output["Payment Type"].value_counts(dropna=False).to_dict(),
@@ -315,6 +345,8 @@ def write_outputs(output: pd.DataFrame, summary: dict[str, Any], audit: pd.DataF
     expedia_unmatched_path = out_dir / "audit_expedia_payment_unmatched.csv"
     arrival_no_match_path = out_dir / "audit_arrival_remark_not_matched.csv"
     active_cancel_unmatched_path = out_dir / "audit_active_cancel_unmatched.csv"
+    active_cancel_fallback_path = out_dir / "audit_active_cancel_arrival_fallback.csv"
+    ctrip_source_fixed_path = out_dir / "audit_business_source_ctrip_fixed.csv"
 
     output.to_csv(csv_path, index=False, quoting=csv.QUOTE_MINIMAL)
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
@@ -331,6 +363,10 @@ def write_outputs(output: pd.DataFrame, summary: dict[str, Any], audit: pd.DataF
     ].to_csv(expedia_unmatched_path, index=False)
     audit[audit["ASI Arrival Remark Match Status"].eq("not_matched")].to_csv(arrival_no_match_path, index=False)
     audit[audit["Active/Cancel"].eq("")].to_csv(active_cancel_unmatched_path, index=False)
+    audit[audit["Active/Cancel Source"].eq("Arrival List fallback")].to_csv(active_cancel_fallback_path, index=False)
+    audit[audit["Business Source Fix Status"].eq("blank_source_set_to_ctrip_from_siteminder")].to_csv(
+        ctrip_source_fixed_path, index=False
+    )
 
 
 def main() -> None:

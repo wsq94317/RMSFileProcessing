@@ -63,6 +63,8 @@ def make_zip(run_id: str, out_dir: Path) -> Path:
         "audit_expedia_payment_unmatched.csv",
         "audit_arrival_remark_not_matched.csv",
         "audit_active_cancel_unmatched.csv",
+        "audit_active_cancel_arrival_fallback.csv",
+        "audit_business_source_ctrip_fixed.csv",
     ]
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for name in names:
@@ -120,6 +122,8 @@ def result(run_id: str):
         ("Expedia payment unmatched audit", "audit_expedia_payment_unmatched.csv"),
         ("Arrival note not matched audit", "audit_arrival_remark_not_matched.csv"),
         ("Active/Cancel unmatched audit", "audit_active_cancel_unmatched.csv"),
+        ("Active/Cancel Arrival fallback audit", "audit_active_cancel_arrival_fallback.csv"),
+        ("Ctrip source fixed audit", "audit_business_source_ctrip_fixed.csv"),
         ("Summary JSON", "rms_absolute_master_summary.json"),
     ]
     return render_template("result.html", run_id=run_id, summary=summary, files=files)
