@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RMS Import Results</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="page">
+    <section class="panel">
+      <div class="header">
+        <div>
+          <h1>生成完成</h1>
+          <p>任务编号：{{ run_id }}</p>
+        </div>
+        <a class="secondary" href="{{ url_for('index') }}">重新上传</a>
+      </div>
+
+      <div class="summary">
+        <div><span>主表输入</span><strong>{{ summary.master_rows_input }}</strong></div>
+        <div><span>主表输出</span><strong>{{ summary.master_rows_output }}</strong></div>
+        <div><span>Note 有内容</span><strong>{{ summary.arrival_exact_name_date_rows_with_remark }}</strong></div>
+        <div><span>Expedia 付款匹配</span><strong>{{ summary.expedia_payment_rows_matched }}</strong></div>
+      </div>
+
+      <h2>下载</h2>
+      <div class="downloads">
+        {% for label, filename in files %}
+          <a href="{{ url_for('download', run_id=run_id, filename=filename) }}">{{ label }}</a>
+        {% endfor %}
+      </div>
+
+      <h2>Active/Cancel</h2>
+      <pre>{{ summary.active_cancel_counts | tojson(indent=2) }}</pre>
+
+      <h2>Payment Type</h2>
+      <pre>{{ summary.payment_type_counts | tojson(indent=2) }}</pre>
+    </section>
+  </main>
+</body>
+</html>

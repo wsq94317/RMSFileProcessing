@@ -1,0 +1,17 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Local dependency/cache folders
+.codex_deps/
+
+# Uploaded hotel/guest data and generated outputs
+tables/
+outputs/
+web_runs/
+
+# Local logs
+*.log
