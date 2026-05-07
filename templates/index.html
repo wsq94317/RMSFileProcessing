@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -12,45 +12,51 @@
       <div class="header">
         <div>
           <h1>RMS Import Builder</h1>
-          <p>上传 ASI、SiteMinder 和 Expedia 文件，生成 RMS 导入主表。</p>
+          <p>Upload the ASI, SiteMinder, and Expedia files to generate the RMS import master file.</p>
         </div>
       </div>
 
       <form method="post" action="{{ url_for('process_uploads') }}" enctype="multipart/form-data" class="form">
         <label class="upload-card">
           <span class="label">1. ASI Advance Guest Search</span>
-          <span class="hint">绝对主表，不删除任何行。示例：21860_AdvanceGuestSearch_20260507_203734.xls</span>
-          <input type="file" name="master_file" accept=".xls,.html,.htm" required>
+          <span class="hint">Absolute master file. No rows from this file will be removed.</span>
+          <span class="example">Example: 21860_AdvanceGuestSearch_20260507_203734.xls</span>
+          <span class="file-row"><input type="file" name="master_file" accept=".xls,.html,.htm" required></span>
         </label>
 
         <label class="upload-card">
           <span class="label">2. ASI Guest Arrival Report</span>
-          <span class="hint">用于复制 Remark 到最终表的 Note。姓名和 check-in/out 日期必须完全一致。</span>
-          <input type="file" name="arrival_file" accept=".xls,.xlsx" required>
+          <span class="hint">Used to copy ASI Remark into the final Note column.</span>
+          <span class="example">Guest name, check-in date, and check-out date must match exactly.</span>
+          <span class="file-row"><input type="file" name="arrival_file" accept=".xls,.xlsx" required></span>
         </label>
 
         <label class="upload-card">
           <span class="label">3. SiteMinder Reservations Summary</span>
-          <span class="hint">可上传一个或多个 CSV，用于判断 Active/Cancel。</span>
-          <input type="file" name="siteminder_files" accept=".csv" multiple required>
+          <span class="hint">Upload one or more SiteMinder CSV exports.</span>
+          <span class="example">Used to set Active/Cancel by matching CRS Folio # to SiteMinder Booking reference.</span>
+          <span class="file-row"><input type="file" name="siteminder_files" accept=".csv" multiple required></span>
         </label>
 
         <label class="upload-card">
           <span class="label">4. Expedia Reservations List</span>
-          <span class="hint">reservationsList.csv，用 CRS Folio # 匹配 Reservation ID 来判断 Expedia Payment Type。</span>
-          <input type="file" name="expedia_file" accept=".csv" required>
+          <span class="hint">Expedia reservationsList.csv.</span>
+          <span class="example">Used to set Expedia Payment Type by matching CRS Folio # to Reservation ID.</span>
+          <span class="file-row"><input type="file" name="expedia_file" accept=".csv" required></span>
         </label>
 
-        <button type="submit">生成文件</button>
+        <div class="actions">
+          <button type="submit">Generate Files</button>
+        </div>
       </form>
     </section>
 
     <section class="guide">
-      <h2>输出列</h2>
+      <h2>Output Columns</h2>
       <div class="grid">
-        <div><strong>Payment Type</strong><span>Prepaid / VCC / POA / 空白</span></div>
-        <div><strong>Note</strong><span>从 Arrival Report 的 Remark 精确匹配复制</span></div>
-        <div><strong>Active/Cancel</strong><span>从 SiteMinder 的 Booking status 判断</span></div>
+        <div><strong>Payment Type</strong><span>Prepaid / VCC / POA / blank</span></div>
+        <div><strong>Note</strong><span>Copied from Arrival Report Remark after exact matching</span></div>
+        <div><strong>Active/Cancel</strong><span>Checked against SiteMinder, with limited Arrival fallback</span></div>
       </div>
     </section>
   </main>

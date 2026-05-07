@@ -58,6 +58,7 @@ h2 {
 
 p,
 .hint,
+.example,
 .summary span {
   color: var(--muted);
 }
@@ -70,19 +71,42 @@ p,
 
 .upload-card {
   display: grid;
-  gap: 8px;
+  gap: 7px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 16px;
+  padding: 18px;
   background: #fbfcfc;
 }
 
 .label {
   font-weight: 700;
+  font-size: 16px;
+}
+
+.hint,
+.example {
+  display: block;
+  line-height: 1.4;
+}
+
+.example {
+  font-size: 13px;
+}
+
+.file-row {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
 }
 
 input[type="file"] {
+  display: block;
   width: 100%;
+  max-width: 620px;
+  min-height: 38px;
+  line-height: 38px;
 }
 
 button,
@@ -108,6 +132,12 @@ button {
 
 button:hover {
   background: var(--accent-dark);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-start;
+  padding-top: 4px;
 }
 
 .secondary,
