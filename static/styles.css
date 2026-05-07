@@ -83,6 +83,14 @@ p,
   font-size: 16px;
 }
 
+.label em {
+  color: var(--muted);
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 600;
+  margin-left: 6px;
+}
+
 .hint,
 .example {
   display: block;

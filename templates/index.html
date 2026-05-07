@@ -45,6 +45,13 @@
           <span class="file-row"><input type="file" name="expedia_file" accept=".csv" required></span>
         </label>
 
+        <label class="upload-card optional">
+          <span class="label">5. ASI Booking Report <em>Optional</em></span>
+          <span class="hint">Used as an additional cancellation check from ASI.</span>
+          <span class="example">Cancelled rows are matched by CRS Folio # = BookingID and moved to Cancelled Bookings.</span>
+          <span class="file-row"><input type="file" name="asi_booking_report_file" accept=".xlsx,.xls,.csv"></span>
+        </label>
+
         <div class="actions">
           <button type="submit">Generate Files</button>
         </div>
@@ -56,7 +63,7 @@
       <div class="grid">
         <div><strong>Payment Type</strong><span>Prepaid / VCC / POA / blank</span></div>
         <div><strong>Note</strong><span>Copied from Arrival Report Remark after exact matching</span></div>
-        <div><strong>Active/Cancel</strong><span>Checked against SiteMinder, with limited Arrival fallback</span></div>
+        <div><strong>Active/Cancel</strong><span>Checked against SiteMinder and optional ASI Booking Report</span></div>
       </div>
     </section>
   </main>
