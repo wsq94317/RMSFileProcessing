@@ -57,16 +57,8 @@ def make_zip(run_id: str, out_dir: Path) -> Path:
     zip_path = out_dir / f"rms_import_results_{run_id}.zip"
     names = [
         "rms_absolute_master_merged.xlsx",
-        "rms_absolute_master_merged.csv",
-        "rms_absolute_master_summary.json",
-        "audit_payment_type_blank.csv",
-        "audit_expedia_payment_unmatched.csv",
-        "audit_arrival_remark_not_matched.csv",
-        "audit_active_cancel_unmatched.csv",
-        "audit_active_cancel_arrival_fallback.csv",
-        "audit_business_source_ctrip_fixed.csv",
-        "audit_business_source_filled_from_siteminder.csv",
-        "audit_status_needs_review.csv",
+        "cancelled_bookings.xlsx",
+        "status_review.xlsx",
     ]
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for name in names:
@@ -120,7 +112,7 @@ def result(run_id: str):
         "result.html",
         run_id=run_id,
         summary=summary,
-        final_excel="rms_absolute_master_merged.xlsx",
+        zip_filename=f"rms_import_results_{run_id}.zip",
     )
 
 

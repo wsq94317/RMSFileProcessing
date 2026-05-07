@@ -56,7 +56,9 @@ PYTHONPATH=.codex_deps /Users/wsq/.cache/codex-runtimes/codex-primary-runtime/de
 Outputs are written to `outputs/rms_import/`:
 
 - `rms_absolute_master_merged.csv`: final merged CSV for RMS import review.
-- `rms_absolute_master_merged.xlsx`: Excel version of the same final merged table.
+- `rms_absolute_master_merged.xlsx`: final active import file; `Cancel` bookings are removed from this file.
+- `cancelled_bookings.xlsx`: bookings marked `Cancel`.
+- `status_review.xlsx`: conservative-default or conflict rows that should be manually checked after migration.
 - `rms_absolute_master_summary.json`: row counts and merge/payment summary.
 - `audit_payment_type_blank.csv`: rows where the requested source rules leave `Payment Type` blank.
 - `audit_expedia_payment_unmatched.csv`: Expedia rows whose `CRS Folio #` did not match `reservationsList.csv`.
@@ -70,6 +72,8 @@ Outputs are written to `outputs/rms_import/`:
 Rules:
 
 - The absolute master row count must stay unchanged; the script stops if the output row count differs.
+- The final import file excludes `Cancel` rows; cancelled rows are written separately to `cancelled_bookings.xlsx`.
+- The web page downloads one ZIP containing three Excel files: active import, cancelled bookings, and status review.
 - `Note` is copied from ASI Arrival Remark only when `First Name + Last Name`, check-in date, and check-out date exactly match the ASI Arrival Report.
 - `Active/Cancel` is checked against all SiteMinder rows by `CRS Folio # = Booking reference`; booked/modified bookings become `Active`.
 - For Hotelbeds only, SiteMinder matching removes the property ID before the first hyphen in `CRS Folio #`; for example `667707-1111-11111` matches SiteMinder `1111-11111`.

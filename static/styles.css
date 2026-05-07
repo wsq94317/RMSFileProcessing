@@ -188,13 +188,18 @@ button:hover {
   grid-template-columns: minmax(220px, 360px);
 }
 
-.primary-download {
-  background: var(--accent);
+.downloads a.primary-download {
+  min-height: 52px;
+  background: #0f766e !important;
+  border-color: #0f766e !important;
   color: #ffffff !important;
+  font-size: 16px;
+  box-shadow: 0 8px 18px rgba(15, 118, 110, 0.22);
 }
 
-.primary-download:hover {
-  background: var(--accent-dark);
+.downloads a.primary-download:hover {
+  background: #0b5f59 !important;
+  border-color: #0b5f59 !important;
 }
 
 pre {

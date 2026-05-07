@@ -495,6 +495,10 @@ def write_outputs(output: pd.DataFrame, summary: dict[str, Any], audit: pd.DataF
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = out_dir / "rms_absolute_master_merged.csv"
     xlsx_path = out_dir / "rms_absolute_master_merged.xlsx"
+    cancelled_csv_path = out_dir / "cancelled_bookings.csv"
+    cancelled_xlsx_path = out_dir / "cancelled_bookings.xlsx"
+    status_review_csv_path = out_dir / "status_review.csv"
+    status_review_xlsx_path = out_dir / "status_review.xlsx"
     summary_path = out_dir / "rms_absolute_master_summary.json"
     blank_payment_path = out_dir / "audit_payment_type_blank.csv"
     expedia_unmatched_path = out_dir / "audit_expedia_payment_unmatched.csv"
@@ -505,7 +509,8 @@ def write_outputs(output: pd.DataFrame, summary: dict[str, Any], audit: pd.DataF
     status_needs_review_path = out_dir / "audit_status_needs_review.csv"
     source_filled_path = out_dir / "audit_business_source_filled_from_siteminder.csv"
 
-    output.to_csv(csv_path, index=False, quoting=csv.QUOTE_MINIMAL)
+    active_output = output[output["Active/Cancel"].ne("Cancel")].copy()
+    cancelled_output = output[output["Active/Cancel"].eq("Cancel")].copy()
     status_review = audit[audit["Status Needs Review"].eq("Yes")].copy()
     review_columns = [
         "_Absolute Master Row #",
@@ -534,15 +539,34 @@ def write_outputs(output: pd.DataFrame, summary: dict[str, Any], audit: pd.DataF
         "Arrival Similar Candidate Remark",
     ]
     status_review = status_review[[c for c in review_columns if c in status_review.columns]]
+
+    summary["active_import_rows"] = int(len(active_output))
+    summary["cancelled_booking_rows"] = int(len(cancelled_output))
+    summary["total_rows_across_active_and_cancelled_files"] = int(len(active_output) + len(cancelled_output))
+    summary["status_review_excel_rows"] = int(len(status_review))
+
+    active_output.to_csv(csv_path, index=False, quoting=csv.QUOTE_MINIMAL)
+    cancelled_output.to_csv(cancelled_csv_path, index=False, quoting=csv.QUOTE_MINIMAL)
+    status_review.to_csv(status_review_csv_path, index=False, quoting=csv.QUOTE_MINIMAL)
+
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
-        output.to_excel(writer, index=False, sheet_name="RMS Import Master")
-        status_review.to_excel(writer, index=False, sheet_name="Status Review")
+        active_output.to_excel(writer, index=False, sheet_name="RMS Import Master")
         ws = writer.book["RMS Import Master"]
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = ws.dimensions
-        review_ws = writer.book["Status Review"]
-        review_ws.freeze_panes = "A2"
-        review_ws.auto_filter.ref = review_ws.dimensions
+
+    with pd.ExcelWriter(cancelled_xlsx_path, engine="openpyxl") as writer:
+        cancelled_output.to_excel(writer, index=False, sheet_name="Cancelled Bookings")
+        ws = writer.book["Cancelled Bookings"]
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+
+    with pd.ExcelWriter(status_review_xlsx_path, engine="openpyxl") as writer:
+        status_review.to_excel(writer, index=False, sheet_name="Status Review")
+        ws = writer.book["Status Review"]
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
 
     audit[audit["Payment Type"].eq("")].to_csv(blank_payment_path, index=False)

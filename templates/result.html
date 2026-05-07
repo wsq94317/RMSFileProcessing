@@ -19,14 +19,14 @@
 
       <div class="summary">
         <div><span>Input Rows</span><strong>{{ summary.master_rows_input }}</strong></div>
-        <div><span>Output Rows</span><strong>{{ summary.master_rows_output }}</strong></div>
-        <div><span>Rows With Notes</span><strong>{{ summary.arrival_exact_name_date_rows_with_remark }}</strong></div>
-        <div><span>Expedia Payments Matched</span><strong>{{ summary.expedia_payment_rows_matched }}</strong></div>
+        <div><span>Import Rows</span><strong>{{ summary.active_import_rows }}</strong></div>
+        <div><span>Cancelled Rows</span><strong>{{ summary.cancelled_booking_rows }}</strong></div>
+        <div><span>Review Rows</span><strong>{{ summary.status_review_excel_rows }}</strong></div>
       </div>
 
       <h2>Download</h2>
       <div class="downloads single">
-        <a class="primary-download" href="{{ url_for('download', run_id=run_id, filename=final_excel) }}">Download Final Excel</a>
+        <a class="primary-download" href="{{ url_for('download', run_id=run_id, filename=zip_filename) }}">Download Excel Files</a>
       </div>
 
       <h2>Active/Cancel</h2>
