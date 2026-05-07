@@ -36,18 +36,6 @@ def save_required_file(run_upload_dir: Path, field_name: str) -> Path:
     return path
 
 
-def save_optional_file(run_upload_dir: Path, field_name: str) -> Path | None:
-    file = request.files.get(field_name)
-    if file is None or not file.filename:
-        return None
-    filename = secure_filename(file.filename)
-    if not filename:
-        raise ValueError(f"Invalid filename for: {field_name}")
-    path = run_upload_dir / filename
-    file.save(path)
-    return path
-
-
 def save_siteminder_files(run_upload_dir: Path) -> list[Path]:
     files = request.files.getlist("siteminder_files")
     paths: list[Path] = []
@@ -96,7 +84,6 @@ def process_uploads():
         batch_folio_file = save_required_file(run_upload_dir, "batch_folio_file")
         arrival_file = save_required_file(run_upload_dir, "arrival_file")
         expedia_file = save_required_file(run_upload_dir, "expedia_file")
-        asi_booking_report_file = save_optional_file(run_upload_dir, "asi_booking_report_file")
         siteminder_files = save_siteminder_files(run_upload_dir)
 
         output, summary, audit = build_master(
@@ -104,7 +91,6 @@ def process_uploads():
             arrival_file=arrival_file,
             expedia_file=expedia_file,
             siteminder_files=siteminder_files,
-            asi_booking_report_file=asi_booking_report_file,
             batch_folio_file=batch_folio_file,
         )
         write_outputs(output, summary, audit, run_output_dir)

@@ -5,13 +5,11 @@ import argparse
 import csv
 import json
 import re
-import zipfile
 from collections import defaultdict
 from datetime import date, datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
-import xml.etree.ElementTree as ET
 
 import pandas as pd
 
@@ -26,7 +24,6 @@ MASTER_FILE = FINAL_INPUT_DIR / "main.xls"
 ARRIVAL_FILE = FINAL_INPUT_DIR / "Arrival.xls"
 EXPEDIA_FILE = FINAL_INPUT_DIR / "EXP.csv"
 BATCH_FOLIO_FILE = FINAL_INPUT_DIR / "Batch Folio.xls"
-ASI_BOOKING_REPORT_FILE = TABLES_DIR / "YEHS Hotel Sydney QVB Booking Report.xlsx"
 
 
 def clean_text(value: Any) -> str:
@@ -270,184 +267,6 @@ def read_expedia_payment_types(path: Path) -> pd.DataFrame:
     )
 
 
-def xlsx_column_index(cell_ref: str) -> int:
-    match = re.match(r"([A-Z]+)", cell_ref or "")
-    if not match:
-        return 0
-    index = 0
-    for char in match.group(1):
-        index = index * 26 + ord(char) - 64
-    return index - 1
-
-
-def read_xlsx_first_sheet_values(path: Path) -> list[list[str]]:
-    main_ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-    rel_ns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-    pkg_rel_ns = "http://schemas.openxmlformats.org/package/2006/relationships"
-    ns = {"a": main_ns, "r": rel_ns, "pr": pkg_rel_ns}
-
-    with zipfile.ZipFile(path) as workbook:
-        shared_strings: list[str] = []
-        if "xl/sharedStrings.xml" in workbook.namelist():
-            shared_root = ET.fromstring(workbook.read("xl/sharedStrings.xml"))
-            for item in shared_root.findall("a:si", ns):
-                shared_strings.append("".join(node.text or "" for node in item.findall(".//a:t", ns)))
-
-        sheet_path = "xl/worksheets/sheet1.xml"
-        if "xl/workbook.xml" in workbook.namelist() and "xl/_rels/workbook.xml.rels" in workbook.namelist():
-            workbook_root = ET.fromstring(workbook.read("xl/workbook.xml"))
-            rels_root = ET.fromstring(workbook.read("xl/_rels/workbook.xml.rels"))
-            first_sheet = workbook_root.find(".//a:sheets/a:sheet", ns)
-            if first_sheet is not None:
-                rel_id = first_sheet.attrib.get(f"{{{rel_ns}}}id", "")
-                for rel in rels_root.findall("pr:Relationship", ns):
-                    if rel.attrib.get("Id") == rel_id:
-                        target = rel.attrib.get("Target", "worksheets/sheet1.xml")
-                        sheet_path = target.lstrip("/")
-                        if not sheet_path.startswith("xl/"):
-                            sheet_path = f"xl/{sheet_path}"
-                        break
-
-        sheet_root = ET.fromstring(workbook.read(sheet_path))
-        rows: list[list[str]] = []
-        for row in sheet_root.findall(".//a:sheetData/a:row", ns):
-            values: list[str] = []
-            for cell in row.findall("a:c", ns):
-                col_idx = xlsx_column_index(cell.attrib.get("r", ""))
-                while len(values) <= col_idx:
-                    values.append("")
-                cell_type = cell.attrib.get("t", "")
-                if cell_type == "inlineStr":
-                    value = "".join(node.text or "" for node in cell.findall(".//a:t", ns))
-                else:
-                    node = cell.find("a:v", ns)
-                    raw_value = node.text if node is not None and node.text is not None else ""
-                    if cell_type == "s" and raw_value.isdigit():
-                        value = shared_strings[int(raw_value)] if int(raw_value) < len(shared_strings) else raw_value
-                    else:
-                        value = raw_value
-                values[col_idx] = clean_line(value)
-            while values and values[-1] == "":
-                values.pop()
-            rows.append(values)
-        return rows
-
-
-def find_header_index(rows: list[list[str]], required_header: str) -> int:
-    required_norm = normalize_source(required_header)
-    for index, row in enumerate(rows):
-        if any(normalize_source(value) == required_norm for value in row):
-            return index
-    raise ValueError(f"ASI Booking Report missing required header: {required_header}")
-
-
-def make_unique_headers(headers: list[str]) -> list[str]:
-    used: dict[str, int] = {}
-    unique = []
-    for idx, header in enumerate(headers, start=1):
-        name = clean_line(header) or f"Column {idx}"
-        count = used.get(name, 0)
-        used[name] = count + 1
-        unique.append(name if count == 0 else f"{name} {count + 1}")
-    return unique
-
-
-def table_from_header_rows(rows: list[list[Any]], required_header: str) -> pd.DataFrame:
-    clean_rows = [[clean_line(value) for value in row] for row in rows]
-    header_idx = find_header_index(clean_rows, required_header)
-    max_cols = max(len(row) for row in clean_rows[header_idx:]) if clean_rows[header_idx:] else 0
-    headers = make_unique_headers(clean_rows[header_idx] + [""] * (max_cols - len(clean_rows[header_idx])))
-    data_rows = []
-    for row in clean_rows[header_idx + 1 :]:
-        padded = row + [""] * (max_cols - len(row))
-        data_rows.append(padded[:max_cols])
-    return pd.DataFrame(data_rows, columns=headers)
-
-
-def is_cancel_value(value: Any) -> bool:
-    return "cancel" in normalize_source(clean_line(value))
-
-
-def asi_status_column_score(series: pd.Series) -> int:
-    values = [clean_line(value) for value in series.tolist() if clean_line(value)]
-    if not values:
-        return 0
-    simple_statuses = {"-", "active", "booked", "confirmed", "modified"}
-    simple_count = 0
-    cancel_count = 0
-    for value in values:
-        normalized = normalize_source(value)
-        if is_cancel_value(value):
-            cancel_count += 1
-            simple_count += 1
-        elif value == "-" or normalized in simple_statuses:
-            simple_count += 1
-    if simple_count / len(values) < 0.8:
-        return 0
-    return simple_count + (cancel_count * 1000)
-
-
-def read_asi_booking_report(path: Path | None = None) -> pd.DataFrame:
-    if path is None:
-        return pd.DataFrame()
-    if not path.exists():
-        raise FileNotFoundError(f"ASI Booking Report not found: {path}")
-
-    suffix = path.suffix.lower()
-    if suffix == ".csv":
-        raw = pd.read_csv(path, dtype=str, keep_default_na=False)
-    elif suffix == ".xlsx":
-        raw = table_from_header_rows(read_xlsx_first_sheet_values(path), "BookingID")
-    else:
-        raw_rows = pd.read_excel(path, header=None, dtype=str, keep_default_na=False).fillna("").values.tolist()
-        raw = table_from_header_rows(raw_rows, "BookingID")
-
-    if raw.empty:
-        return pd.DataFrame()
-
-    raw = raw.copy().fillna("")
-    normalized_columns = {normalize_source(col): col for col in raw.columns}
-    booking_col = normalized_columns.get("bookingid") or normalized_columns.get("booking id")
-    if not booking_col:
-        raise ValueError("ASI Booking Report missing BookingID column")
-
-    status_col = (
-        normalized_columns.get("booking status")
-        or normalized_columns.get("status")
-        or normalized_columns.get("active cancel")
-    )
-    if not status_col:
-        cancel_counts = {
-            col: asi_status_column_score(raw[col])
-            for col in raw.columns
-            if col != booking_col
-        }
-        status_col = max(cancel_counts, key=cancel_counts.get) if cancel_counts else ""
-        if not status_col or cancel_counts.get(status_col, 0) == 0:
-            raise ValueError("ASI Booking Report missing a status/cancel column")
-
-    report = raw[[booking_col, status_col]].copy()
-    report.columns = ["ASI Booking Report Booking ID", "ASI Booking Report Status"]
-    report["ASI Booking Report Booking ID"] = report["ASI Booking Report Booking ID"].map(normalize_booking_id)
-    report["ASI Booking Report Status"] = report["ASI Booking Report Status"].map(clean_line)
-    report = report[report["ASI Booking Report Booking ID"].ne("")].copy()
-    if report.empty:
-        return report
-
-    grouped_rows = []
-    for booking_id, group in report.groupby("ASI Booking Report Booking ID", dropna=False):
-        statuses = [clean_line(value) for value in group["ASI Booking Report Status"].tolist() if clean_line(value)]
-        grouped_rows.append(
-            {
-                "ASI Booking Report Booking ID": booking_id,
-                "ASI Booking Report Statuses": "|".join(sorted(set(statuses))),
-                "ASI Booking Report Active/Cancel": "Cancel" if any(is_cancel_value(value) for value in statuses) else "",
-                "ASI Booking Report Row Count": int(len(group)),
-            }
-        )
-    return pd.DataFrame(grouped_rows)
-
-
 def normalize_source(source: str) -> str:
     text = clean_line(source).lower()
     text = text.replace("&", "and")
@@ -615,7 +434,6 @@ def build_master(
     arrival_file: Path = ARRIVAL_FILE,
     expedia_file: Path = EXPEDIA_FILE,
     siteminder_files: list[Path] | None = None,
-    asi_booking_report_file: Path | None = None,
     batch_folio_file: Path | None = BATCH_FOLIO_FILE,
 ) -> tuple[pd.DataFrame, dict[str, Any], pd.DataFrame]:
     master_all = read_absolute_master(master_file)
@@ -680,22 +498,6 @@ def build_master(
         right_on="Expedia Reservation ID",
         validate="many_to_one",
     )
-
-    asi_booking_report = read_asi_booking_report(asi_booking_report_file)
-    if not asi_booking_report.empty:
-        merged["_asi_booking_report_match_key"] = merged["CRS Folio #"].map(normalize_booking_id)
-        merged = merged.merge(
-            asi_booking_report,
-            how="left",
-            left_on="_asi_booking_report_match_key",
-            right_on="ASI Booking Report Booking ID",
-            validate="many_to_one",
-        )
-    else:
-        merged["ASI Booking Report Booking ID"] = ""
-        merged["ASI Booking Report Statuses"] = ""
-        merged["ASI Booking Report Active/Cancel"] = ""
-        merged["ASI Booking Report Row Count"] = ""
 
     original_source_norm = merged["Business Source"].map(normalize_source)
     source_was_blank = merged["Business Source"].fillna("").map(clean_line).eq("")
@@ -800,22 +602,6 @@ def build_master(
         merged.loc[blank_name_review, "Status Review Reason"] + " Master guest name is blank, so Arrival name matching is unreliable."
     )
 
-    asi_booking_report_uploaded = asi_booking_report_file is not None
-    has_asi_booking_report = merged["ASI Booking Report Booking ID"].fillna("").ne("")
-    asi_booking_report_cancel = merged["ASI Booking Report Active/Cancel"].fillna("").eq("Cancel")
-    merged["ASI Booking Report Match Status"] = "not_uploaded"
-    if asi_booking_report_uploaded:
-        merged["ASI Booking Report Match Status"] = "not_matched"
-        merged.loc[has_asi_booking_report, "ASI Booking Report Match Status"] = "matched"
-    merged["ASI Booking Report Cancel Override"] = ""
-    merged.loc[asi_booking_report_cancel, "ASI Booking Report Cancel Override"] = (
-        merged.loc[asi_booking_report_cancel, "Active/Cancel"].fillna("") + " -> Cancel"
-    )
-    merged.loc[asi_booking_report_cancel, "Active/Cancel"] = "Cancel"
-    merged.loc[asi_booking_report_cancel, "Active/Cancel Source"] = "ASI Booking Report Cancel"
-    merged.loc[asi_booking_report_cancel, "Status Needs Review"] = "No"
-    merged.loc[asi_booking_report_cancel, "Status Review Reason"] = ""
-
     expected_enriched_rows = master_original_rows
     if len(merged) != expected_enriched_rows:
         raise RuntimeError(f"Enriched row count changed from {expected_enriched_rows} to {len(merged)}")
@@ -832,7 +618,6 @@ def build_master(
         "master_file": str(master_file),
         "arrival_file": str(arrival_file),
         "expedia_file": str(expedia_file),
-        "asi_booking_report_file": str(asi_booking_report_file) if asi_booking_report_file else "",
         "batch_folio_file": str(batch_folio_file) if batch_folio_file else "",
         "siteminder_files": [str(p) for p in (siteminder_files if siteminder_files is not None else default_siteminder_files())],
         "master_rows_input": master_original_rows,
@@ -847,9 +632,6 @@ def build_master(
             (has_arrival & merged["ASI Arrival Remark"].fillna("").ne("")).sum()
         ),
         "siteminder_booking_refs": int(len(sm)),
-        "asi_booking_report_rows": int(len(asi_booking_report)),
-        "asi_booking_report_rows_matched": int(has_asi_booking_report.sum()),
-        "asi_booking_report_cancelled_rows_matched": int(asi_booking_report_cancel.sum()),
         "hotelbeds_rows_with_trimmed_siteminder_match_key": int(
             (original_source_norm.eq("hotelbeds") & merged.get("_siteminder_match_key", pd.Series("", index=merged.index)).ne(merged["CRS Folio #"])).sum()
         ),
@@ -891,7 +673,6 @@ def write_outputs(output: pd.DataFrame, summary: dict[str, Any], audit: pd.DataF
     ctrip_source_fixed_path = out_dir / "audit_business_source_ctrip_fixed.csv"
     status_needs_review_path = out_dir / "audit_status_needs_review.csv"
     source_filled_path = out_dir / "audit_business_source_filled_from_siteminder.csv"
-    asi_booking_report_cancelled_path = out_dir / "audit_asi_booking_report_cancelled.csv"
     batch_folio_siteminder_conflicts_path = out_dir / "audit_batch_folio_siteminder_conflicts.csv"
 
     active_output = output[output["Active/Cancel"].ne("Cancel")].copy()
@@ -978,9 +759,6 @@ def write_outputs(output: pd.DataFrame, summary: dict[str, Any], audit: pd.DataF
         ctrip_source_fixed_path, index=False
     )
     audit[audit["Status Needs Review"].eq("Yes")].to_csv(status_needs_review_path, index=False)
-    audit[audit["ASI Booking Report Active/Cancel"].eq("Cancel")].to_csv(
-        asi_booking_report_cancelled_path, index=False
-    )
     audit[
         audit["Status Review Reason"].str.contains("Batch Folio", na=False)
         & audit["SM Active/Cancel"].fillna("").ne("")
@@ -995,7 +773,6 @@ def main() -> None:
     parser.add_argument("--expedia-file", type=Path, default=EXPEDIA_FILE)
     parser.add_argument("--batch-folio-file", type=Path, default=BATCH_FOLIO_FILE)
     parser.add_argument("--no-batch-folio", action="store_true")
-    parser.add_argument("--asi-booking-report-file", type=Path, default=None)
     parser.add_argument("--siteminder-file", type=Path, action="append", dest="siteminder_files")
     parser.add_argument("--no-siteminder", action="store_true")
     args = parser.parse_args()
@@ -1004,7 +781,6 @@ def main() -> None:
         arrival_file=args.arrival_file,
         expedia_file=args.expedia_file,
         siteminder_files=[] if args.no_siteminder else args.siteminder_files,
-        asi_booking_report_file=args.asi_booking_report_file,
         batch_folio_file=None if args.no_batch_folio else args.batch_folio_file,
     )
     write_outputs(output, summary, audit, args.output_dir)

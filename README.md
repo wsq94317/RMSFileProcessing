@@ -53,12 +53,6 @@ Run:
 PYTHONPATH=.codex_deps /Users/wsq/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 scripts/build_rms_import_master.py
 ```
 
-To include the optional ASI Booking Report cancellation check:
-
-```bash
-PYTHONPATH=.codex_deps /Users/wsq/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 scripts/build_rms_import_master.py --asi-booking-report-file "tables/YEHS Hotel Sydney QVB Booking Report.xlsx"
-```
-
 To run without SiteMinder cross-checking:
 
 ```bash
@@ -80,7 +74,6 @@ Outputs are written to `outputs/rms_import/`:
 - `audit_status_needs_review.csv`: only status-conflict rows that should be manually checked after migration.
 - `audit_business_source_filled_from_siteminder.csv`: rows where blank `Business Source` was filled from SiteMinder channel data.
 - `audit_business_source_ctrip_fixed.csv`: rows where blank `Business Source` was specifically set to `Ctrip` from SiteMinder channel data.
-- `audit_asi_booking_report_cancelled.csv`: rows moved to `Cancel` by the optional ASI Booking Report.
 - `audit_batch_folio_siteminder_conflicts.csv`: rows where Batch Folio status and SiteMinder status disagree.
 
 Rules:
@@ -92,7 +85,6 @@ Rules:
 - The web page downloads one ZIP containing three Excel files: active import, cancelled bookings, and status review.
 - `Note` is copied from ASI Arrival Remark only when `First Name + Last Name`, check-in date, and check-out date exactly match the ASI Arrival Report.
 - SiteMinder is optional when Batch Folio is uploaded. It is used for source recovery and conflict audit, not as the primary cancellation source.
-- Optional ASI Booking Report cancellation check runs after Batch Folio/Arrival logic. If `CRS Folio # = BookingID` and the Booking Report row is `Cancelled`, the row becomes `Cancel`.
 - For Hotelbeds only, SiteMinder matching removes the property ID before the first hyphen in `CRS Folio #`; for example `667707-1111-11111` matches SiteMinder `1111-11111`.
 - If master `Business Source` is blank but `CRS Folio #` matches SiteMinder, the output `Business Source` is filled from SiteMinder channel data where possible. Trip.com/Ctrip is normalized to `Ctrip`.
 - Expedia `Payment Type` is based on `CRS Folio # = Reservation ID` in `tables/FinalInput/EXP.csv`.
@@ -125,7 +117,6 @@ The upload page requires:
 - ASI Guest Arrival Report: the Arrival report containing the ASI `Remark`; exact guest name plus check-in/check-out date is required before copying it into `Note`.
 - Expedia Reservations List CSV: `reservationsList.csv`; used only for Expedia `Payment Type`.
 - SiteMinder Reservations Summary CSV: optional; used for source recovery and status conflict audit.
-- ASI Booking Report: optional extra ASI cancellation file; `Cancelled` bookings are matched by `CRS Folio # = BookingID` and moved to `cancelled_bookings.xlsx`.
 
 For production, run Flask behind a proper WSGI server such as gunicorn or uwsgi, and protect the page because uploaded files contain guest personal data.
 
