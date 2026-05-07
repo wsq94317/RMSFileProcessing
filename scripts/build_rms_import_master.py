@@ -267,14 +267,17 @@ def build_master(
         right_on="Expedia Reservation ID",
         validate="many_to_one",
     )
+    original_source_norm = merged["Business Source"].map(normalize_source)
+    fallback_allowed = original_source_norm.isin(["", "asi", "mobile"])
     source_was_blank = merged["Business Source"].fillna("").map(clean_line).eq("")
     ctrip_from_siteminder = source_was_blank & merged.apply(is_ctrip_siteminder, axis=1)
     merged.loc[ctrip_from_siteminder, "Business Source"] = "Ctrip"
 
     has_arrival = merged["ASI Arrival Match Count"].notna()
     missing_siteminder_status = merged["Active/Cancel"].fillna("").eq("")
-    merged.loc[missing_siteminder_status & has_arrival, "Active/Cancel"] = "Active"
-    merged.loc[missing_siteminder_status & ~has_arrival, "Active/Cancel"] = "Cancel"
+    fallback_rows = missing_siteminder_status & fallback_allowed
+    merged.loc[fallback_rows & has_arrival, "Active/Cancel"] = "Active"
+    merged.loc[fallback_rows & ~has_arrival, "Active/Cancel"] = "Cancel"
 
     merged["Payment Type"] = merged.apply(payment_method, axis=1)
     merged["Note"] = merged["ASI Arrival Remark"].fillna("")
@@ -298,7 +301,8 @@ def build_master(
     merged.loc[is_expedia & merged["Expedia Payment Type"].fillna("").ne(""), "Expedia Payment Match Status"] = "matched"
     merged["Business Source Fix Status"] = ""
     merged.loc[ctrip_from_siteminder, "Business Source Fix Status"] = "blank_source_set_to_ctrip_from_siteminder"
-    merged["Active/Cancel Source"] = "Arrival List fallback"
+    merged["Active/Cancel Source"] = "No SiteMinder match; fallback not applicable"
+    merged.loc[fallback_rows, "Active/Cancel Source"] = "Arrival List fallback"
     merged.loc[merged.get("SM Booking reference", pd.Series("", index=merged.index)).fillna("").ne(""), "Active/Cancel Source"] = "SiteMinder"
 
     if len(merged) != master_original_rows:
@@ -324,6 +328,7 @@ def build_master(
         "siteminder_booking_refs": int(len(sm)),
         "active_cancel_counts": output["Active/Cancel"].value_counts(dropna=False).to_dict(),
         "active_cancel_source_counts": merged["Active/Cancel Source"].value_counts(dropna=False).to_dict(),
+        "active_cancel_blank_after_restricted_fallback": int(output["Active/Cancel"].eq("").sum()),
         "business_source_blank_set_to_ctrip_from_siteminder": int(ctrip_from_siteminder.sum()),
         "expedia_rows": int(is_expedia.sum()),
         "expedia_payment_rows_matched": int(merged["Expedia Payment Match Status"].eq("matched").sum()),
