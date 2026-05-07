@@ -25,17 +25,17 @@
         </label>
 
         <label class="upload-card">
-          <span class="label">2. ASI Guest Arrival Report</span>
-          <span class="hint">Used to copy ASI Remark into the final Note column.</span>
-          <span class="example">Guest name, check-in date, and check-out date must match exactly.</span>
-          <span class="file-row"><input type="file" name="arrival_file" accept=".xls,.xlsx" required></span>
+          <span class="label">2. ASI Batch Folio</span>
+          <span class="hint">Primary active-booking filter from ASI.</span>
+          <span class="example">Missing Folio No. rows are normally cancelled; SiteMinder-active conflicts stay active for review.</span>
+          <span class="file-row"><input type="file" name="batch_folio_file" accept=".xls,.xlsx" required></span>
         </label>
 
         <label class="upload-card">
-          <span class="label">3. SiteMinder Reservations Summary</span>
-          <span class="hint">Upload one or more SiteMinder CSV exports.</span>
-          <span class="example">Used to set Active/Cancel by matching CRS Folio # to SiteMinder Booking reference.</span>
-          <span class="file-row"><input type="file" name="siteminder_files" accept=".csv" multiple required></span>
+          <span class="label">3. ASI Guest Arrival Report</span>
+          <span class="hint">Used to copy ASI Remark into the final Note column.</span>
+          <span class="example">Guest name, check-in date, and check-out date must match exactly.</span>
+          <span class="file-row"><input type="file" name="arrival_file" accept=".xls,.xlsx" required></span>
         </label>
 
         <label class="upload-card">
@@ -46,7 +46,14 @@
         </label>
 
         <label class="upload-card optional">
-          <span class="label">5. ASI Booking Report <em>Optional</em></span>
+          <span class="label">5. SiteMinder Reservations Summary <em>Optional</em></span>
+          <span class="hint">Used for source recovery and cross-check audit only.</span>
+          <span class="example">Active/Cancel is controlled by ASI Batch Folio when Batch Folio is uploaded.</span>
+          <span class="file-row"><input type="file" name="siteminder_files" accept=".csv" multiple></span>
+        </label>
+
+        <label class="upload-card optional">
+          <span class="label">6. ASI Booking Report <em>Optional</em></span>
           <span class="hint">Used as an additional cancellation check from ASI.</span>
           <span class="example">Cancelled rows are matched by CRS Folio # = BookingID and moved to Cancelled Bookings.</span>
           <span class="file-row"><input type="file" name="asi_booking_report_file" accept=".xlsx,.xls,.csv"></span>
@@ -63,7 +70,7 @@
       <div class="grid">
         <div><strong>Payment Type</strong><span>Prepaid / VCC / POA / blank</span></div>
         <div><strong>Note</strong><span>Copied from Arrival Report Remark after exact matching</span></div>
-        <div><strong>Active/Cancel</strong><span>Checked against SiteMinder and optional ASI Booking Report</span></div>
+        <div><strong>Active/Cancel</strong><span>Controlled by ASI Batch Folio, with conflict review</span></div>
       </div>
     </section>
   </main>

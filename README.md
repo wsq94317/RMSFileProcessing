@@ -44,8 +44,8 @@ Integrity checks:
 
 ## Absolute RMS import master
 
-The RMS import pipeline uses `tables/new/21860_AdvanceGuestSearch_20260507_203734.xls` as the absolute master file.
-It never deletes master rows and appends only three fields to the right: `Payment Type`, `Note`, and `Active/Cancel`.
+The RMS import pipeline uses `tables/FinalInput/main.xls` as the absolute master file.
+It first filters active bookings with `tables/FinalInput/Batch Folio.xls` by `Folio No. = Folio #`, then appends only three fields to the right of the original master columns: `Payment Type`, `Note`, and `Active/Cancel`.
 
 Run:
 
@@ -59,36 +59,43 @@ To include the optional ASI Booking Report cancellation check:
 PYTHONPATH=.codex_deps /Users/wsq/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 scripts/build_rms_import_master.py --asi-booking-report-file "tables/YEHS Hotel Sydney QVB Booking Report.xlsx"
 ```
 
+To run without SiteMinder cross-checking:
+
+```bash
+PYTHONPATH=.codex_deps /Users/wsq/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 scripts/build_rms_import_master.py --no-siteminder
+```
+
 Outputs are written to `outputs/rms_import/`:
 
 - `rms_absolute_master_merged.csv`: final merged CSV for RMS import review.
 - `rms_absolute_master_merged.xlsx`: final active import file; `Cancel` bookings are removed from this file.
 - `cancelled_bookings.xlsx`: bookings marked `Cancel`.
-- `status_review.xlsx`: conservative-default or conflict rows that should be manually checked after migration.
+- `status_review.xlsx`: only status-conflict rows that should be manually checked after migration.
 - `rms_absolute_master_summary.json`: row counts and merge/payment summary.
 - `audit_payment_type_blank.csv`: rows where the requested source rules leave `Payment Type` blank.
 - `audit_expedia_payment_unmatched.csv`: Expedia rows whose `CRS Folio #` did not match `reservationsList.csv`.
 - `audit_arrival_remark_not_matched.csv`: master rows where Arrival Remark was not added because exact name/date matching failed.
 - `audit_active_cancel_unmatched.csv`: rows where `Active/Cancel` is still blank; this should normally be empty under conservative status mode.
 - `audit_active_cancel_arrival_fallback.csv`: rows where Arrival List exact or similar matching affected `Active/Cancel`.
-- `audit_status_needs_review.csv`: conservative-default or conflict rows that should be manually checked after migration.
+- `audit_status_needs_review.csv`: only status-conflict rows that should be manually checked after migration.
 - `audit_business_source_filled_from_siteminder.csv`: rows where blank `Business Source` was filled from SiteMinder channel data.
 - `audit_business_source_ctrip_fixed.csv`: rows where blank `Business Source` was specifically set to `Ctrip` from SiteMinder channel data.
 - `audit_asi_booking_report_cancelled.csv`: rows moved to `Cancel` by the optional ASI Booking Report.
+- `audit_batch_folio_siteminder_conflicts.csv`: rows where Batch Folio status and SiteMinder status disagree.
 
 Rules:
 
 - The absolute master row count must stay unchanged; the script stops if the output row count differs.
+- Batch Folio is the primary active/cancel source. If a master row's `Folio No.` is not present in Batch Folio `Folio #`, it is normally treated as `Cancel`.
+- If a row is missing from Batch Folio but SiteMinder says it is active, the row stays `Active` in the import file and is written to `status_review.xlsx`.
 - The final import file excludes `Cancel` rows; cancelled rows are written separately to `cancelled_bookings.xlsx`.
 - The web page downloads one ZIP containing three Excel files: active import, cancelled bookings, and status review.
 - `Note` is copied from ASI Arrival Remark only when `First Name + Last Name`, check-in date, and check-out date exactly match the ASI Arrival Report.
-- `Active/Cancel` is checked against all SiteMinder rows by `CRS Folio # = Booking reference`; booked/modified bookings become `Active`.
-- Optional ASI Booking Report cancellation check runs after SiteMinder/Arrival logic. If `CRS Folio # = BookingID` and the Booking Report row is `Cancelled`, the row becomes `Cancel`.
+- SiteMinder is optional when Batch Folio is uploaded. It is used for source recovery and conflict audit, not as the primary cancellation source.
+- Optional ASI Booking Report cancellation check runs after Batch Folio/Arrival logic. If `CRS Folio # = BookingID` and the Booking Report row is `Cancelled`, the row becomes `Cancel`.
 - For Hotelbeds only, SiteMinder matching removes the property ID before the first hyphen in `CRS Folio #`; for example `667707-1111-11111` matches SiteMinder `1111-11111`.
-- Conservative status mode: only SiteMinder can prove `Cancel`, and SiteMinder `Cancel` is overridden to `Active` if Arrival List has an exact or highly similar same-date candidate.
-- If SiteMinder does not match, `Active/Cancel` defaults to `Active` and the row is written to `audit_status_needs_review.csv`.
 - If master `Business Source` is blank but `CRS Folio #` matches SiteMinder, the output `Business Source` is filled from SiteMinder channel data where possible. Trip.com/Ctrip is normalized to `Ctrip`.
-- Expedia `Payment Type` is based on `CRS Folio # = Reservation ID` in `tables/new/reservationsList.csv`.
+- Expedia `Payment Type` is based on `CRS Folio # = Reservation ID` in `tables/FinalInput/EXP.csv`.
 - `Payment Type` mapping: Agoda/Ctrip/AirBnBXML = `Prepaid`; Hotelbeds/Hopper/Jetstar-Hooroo-Qantas/Restel/Traveloka/WebBeds = `VCC`; Anand Systems Booking Engine/Booking.com/Mobile = `POA`; Expedia uses the Expedia payment type file. HotelNetwork, DayUse, and any other unlisted source stay blank.
 
 ## Web app
@@ -114,9 +121,10 @@ http://SERVER_IP:8000
 The upload page requires:
 
 - ASI Advance Guest Search: the absolute master table. The output keeps all rows from this file.
+- ASI Batch Folio: required active-booking filter. Master rows missing from this file are normally moved to `cancelled_bookings.xlsx`; SiteMinder-active conflicts stay in the active file and are written to `status_review.xlsx`.
 - ASI Guest Arrival Report: the Arrival report containing the ASI `Remark`; exact guest name plus check-in/check-out date is required before copying it into `Note`.
-- SiteMinder Reservations Summary CSV: one or more SiteMinder CSV exports; used to set `Active/Cancel`.
 - Expedia Reservations List CSV: `reservationsList.csv`; used only for Expedia `Payment Type`.
+- SiteMinder Reservations Summary CSV: optional; used for source recovery and status conflict audit.
 - ASI Booking Report: optional extra ASI cancellation file; `Cancelled` bookings are matched by `CRS Folio # = BookingID` and moved to `cancelled_bookings.xlsx`.
 
 For production, run Flask behind a proper WSGI server such as gunicorn or uwsgi, and protect the page because uploaded files contain guest personal data.

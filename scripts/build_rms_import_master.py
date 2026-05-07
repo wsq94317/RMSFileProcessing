@@ -18,12 +18,14 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 TABLES_DIR = ROOT / "tables"
+FINAL_INPUT_DIR = TABLES_DIR / "FinalInput"
 NEW_DIR = TABLES_DIR / "new"
 OUTPUT_DIR = ROOT / "outputs" / "rms_import"
 
-MASTER_FILE = NEW_DIR / "21860_AdvanceGuestSearch_20260507_203734.xls"
-ARRIVAL_FILE = NEW_DIR / "21860_GuestArrivalReport_07-May-2026_134356.xls"
-EXPEDIA_FILE = NEW_DIR / "reservationsList.csv"
+MASTER_FILE = FINAL_INPUT_DIR / "main.xls"
+ARRIVAL_FILE = FINAL_INPUT_DIR / "Arrival.xls"
+EXPEDIA_FILE = FINAL_INPUT_DIR / "EXP.csv"
+BATCH_FOLIO_FILE = FINAL_INPUT_DIR / "Batch Folio.xls"
 ASI_BOOKING_REPORT_FILE = TABLES_DIR / "YEHS Hotel Sydney QVB Booking Report.xlsx"
 
 
@@ -144,9 +146,84 @@ def read_arrival_remarks(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     return arrival, grouped
 
 
+def default_siteminder_files() -> list[Path]:
+    final_input_siteminder = FINAL_INPUT_DIR / "SiteMinder.csv"
+    if final_input_siteminder.exists():
+        return [final_input_siteminder]
+    return sorted(TABLES_DIR.glob("reservations_summary_report*.csv"))
+
+
+def read_batch_folio(path: Path | None = None) -> pd.DataFrame:
+    if path is None:
+        return pd.DataFrame()
+    if not path.exists():
+        raise FileNotFoundError(f"Batch Folio file not found: {path}")
+
+    raw = pd.read_excel(path, header=None, engine="xlrd", dtype=str).fillna("")
+    header_row_index: int | None = None
+    header_values: list[str] = []
+    for idx, row in raw.iterrows():
+        values = [clean_line(value) for value in row.tolist()]
+        normalized = [normalize_source(value) for value in values]
+        if "folio" in normalized or "folio number" in normalized:
+            header_row_index = idx
+            header_values = values
+            break
+    if header_row_index is None:
+        raise ValueError("Batch Folio file missing Folio # header")
+
+    normalized_headers = [normalize_source(value) for value in header_values]
+
+    def header_col(*names: str) -> int | None:
+        for name in names:
+            normalized_name = normalize_source(name)
+            if normalized_name in normalized_headers:
+                return normalized_headers.index(normalized_name)
+        return None
+
+    folio_col = header_col("Folio #", "Folio No.", "Folio Number", "Folio")
+    if folio_col is None:
+        raise ValueError("Batch Folio file missing Folio # column")
+
+    room_col = header_col("Room")
+    first_col = header_col("First Name")
+    last_col = header_col("Last Name")
+    date_in_col = header_col("Date In")
+    date_out_col = header_col("Date Out")
+    source_col = header_col("Business Source")
+
+    rows: list[dict[str, Any]] = []
+    for idx, row in raw.iloc[header_row_index + 1 :].iterrows():
+        folio = normalize_booking_id(row.get(folio_col, ""))
+        if not folio or normalize_source(folio) in {"folio", "folio number"}:
+            continue
+        rows.append(
+            {
+                "Batch Folio Source Row": idx + 1,
+                "Batch Folio #": folio,
+                "Batch Folio Room": clean_line(row.get(room_col, "")) if room_col is not None else "",
+                "Batch Folio First Name": clean_line(row.get(first_col, "")) if first_col is not None else "",
+                "Batch Folio Last Name": clean_line(row.get(last_col, "")) if last_col is not None else "",
+                "Batch Folio Date In": iso_date(as_date(row.get(date_in_col, ""))) if date_in_col is not None else "",
+                "Batch Folio Date Out": iso_date(as_date(row.get(date_out_col, ""))) if date_out_col is not None else "",
+                "Batch Folio Business Source": clean_line(row.get(source_col, "")) if source_col is not None else "",
+            }
+        )
+
+    batch = pd.DataFrame(rows)
+    if batch.empty:
+        raise ValueError("Batch Folio file did not contain any usable Folio # rows")
+    duplicates = batch["Batch Folio #"].value_counts()
+    duplicated = duplicates[duplicates > 1]
+    if not duplicated.empty:
+        sample = ", ".join(duplicated.head(10).index.tolist())
+        raise ValueError(f"Batch Folio contains duplicate Folio # values: {sample}")
+    return batch
+
+
 def read_siteminder(paths: list[Path] | None = None) -> pd.DataFrame:
     frames = []
-    source_paths = paths if paths is not None else sorted(TABLES_DIR.glob("reservations_summary_report*.csv"))
+    source_paths = paths if paths is not None else default_siteminder_files()
     for path in source_paths:
         df = pd.read_csv(path, dtype=str, keep_default_na=False)
         df["SiteMinder Source File"] = path.name
@@ -169,7 +246,7 @@ def read_siteminder(paths: list[Path] | None = None) -> pd.DataFrame:
                 "SM Statuses": "|".join(sorted(set(statuses))),
                 "SM Channels": "|".join(sorted(set(channels))),
                 "SM Affiliated Channels": "|".join(sorted(set(affiliated_channels))),
-                "Active/Cancel": "Active" if non_cancelled else "Cancel",
+                "SM Active/Cancel": "Active" if non_cancelled else "Cancel",
                 "SM Matched Row Count": int(len(group)),
             }
         )
@@ -539,10 +616,33 @@ def build_master(
     expedia_file: Path = EXPEDIA_FILE,
     siteminder_files: list[Path] | None = None,
     asi_booking_report_file: Path | None = None,
+    batch_folio_file: Path | None = BATCH_FOLIO_FILE,
 ) -> tuple[pd.DataFrame, dict[str, Any], pd.DataFrame]:
-    master = read_absolute_master(master_file)
-    master_columns = list(master.attrs["master_columns"])
-    master_original_rows = len(master)
+    master_all = read_absolute_master(master_file)
+    master_columns = list(master_all.attrs["master_columns"])
+    master_original_rows = len(master_all)
+
+    batch_folio = read_batch_folio(batch_folio_file)
+    batch_folio_enabled = not batch_folio.empty
+    batch_folio_unmatched_count = 0
+    if batch_folio_enabled:
+        master_all["_folio_match_key"] = master_all["Folio No."].map(normalize_booking_id)
+        batch_folio_numbers = set(batch_folio["Batch Folio #"].map(normalize_booking_id))
+        master_folio_numbers = set(master_all["_folio_match_key"])
+        batch_folio_unmatched_count = len(batch_folio_numbers - master_folio_numbers)
+        master = master_all.copy()
+        master = master.merge(
+            batch_folio,
+            how="left",
+            left_on="_folio_match_key",
+            right_on="Batch Folio #",
+            validate="many_to_one",
+        )
+        master["Batch Folio Match Status"] = "not_in_batch_folio"
+        master.loc[master["Batch Folio #"].fillna("").ne(""), "Batch Folio Match Status"] = "matched_active"
+    else:
+        master = master_all.copy()
+        master["Batch Folio Match Status"] = "not_uploaded"
 
     arrival_raw, arrival_grouped = read_arrival_remarks(arrival_file)
     merged = master.merge(
@@ -564,6 +664,13 @@ def build_master(
             right_on="SM Booking reference",
             validate="many_to_one",
         )
+    else:
+        merged["SM Booking reference"] = ""
+        merged["SM Statuses"] = ""
+        merged["SM Channels"] = ""
+        merged["SM Affiliated Channels"] = ""
+        merged["SM Active/Cancel"] = ""
+        merged["SM Matched Row Count"] = ""
 
     expedia = read_expedia_payment_types(expedia_file)
     merged = merged.merge(
@@ -601,15 +708,34 @@ def build_master(
     has_similar_arrival = (~has_arrival) & merged["Arrival Similar Candidate Score"].fillna(0).astype(int).ge(88)
     has_arrival_signal = has_arrival | has_similar_arrival
     has_siteminder = merged.get("SM Booking reference", pd.Series("", index=merged.index)).fillna("").ne("")
-    siteminder_cancel = has_siteminder & merged["Active/Cancel"].fillna("").eq("Cancel")
+    siteminder_active = has_siteminder & merged["SM Active/Cancel"].fillna("").eq("Active")
+    siteminder_cancel = has_siteminder & merged["SM Active/Cancel"].fillna("").eq("Cancel")
     no_siteminder = ~has_siteminder
-    cancel_conflict = siteminder_cancel & has_arrival_signal
-    no_siteminder_exact_arrival = no_siteminder & has_arrival
-    no_siteminder_similar_arrival = no_siteminder & ~has_arrival & has_similar_arrival
-    no_siteminder_default_active = no_siteminder & ~has_arrival_signal
-
-    merged.loc[cancel_conflict, "Active/Cancel"] = "Active"
-    merged.loc[no_siteminder, "Active/Cancel"] = "Active"
+    if batch_folio_enabled:
+        has_batch_folio = merged["Batch Folio #"].fillna("").ne("")
+        missing_batch_folio = ~has_batch_folio
+        cancel_conflict = pd.Series(False, index=merged.index)
+        no_siteminder_exact_arrival = pd.Series(False, index=merged.index)
+        no_siteminder_similar_arrival = pd.Series(False, index=merged.index)
+        no_siteminder_default_active = pd.Series(False, index=merged.index)
+        batch_active_siteminder_cancel_conflict = has_batch_folio & siteminder_cancel
+        batch_missing_siteminder_active_conflict = missing_batch_folio & siteminder_active
+        batch_folio_cancel = missing_batch_folio & ~siteminder_active
+        merged["Active/Cancel"] = "Active"
+        merged.loc[batch_folio_cancel, "Active/Cancel"] = "Cancel"
+    else:
+        has_batch_folio = pd.Series(False, index=merged.index)
+        missing_batch_folio = pd.Series(False, index=merged.index)
+        cancel_conflict = siteminder_cancel & has_arrival_signal
+        no_siteminder_exact_arrival = no_siteminder & has_arrival
+        no_siteminder_similar_arrival = no_siteminder & ~has_arrival & has_similar_arrival
+        no_siteminder_default_active = no_siteminder & ~has_arrival_signal
+        batch_active_siteminder_cancel_conflict = pd.Series(False, index=merged.index)
+        batch_missing_siteminder_active_conflict = pd.Series(False, index=merged.index)
+        batch_folio_cancel = pd.Series(False, index=merged.index)
+        merged.loc[has_siteminder, "Active/Cancel"] = merged.loc[has_siteminder, "SM Active/Cancel"]
+        merged.loc[cancel_conflict, "Active/Cancel"] = "Active"
+        merged.loc[no_siteminder, "Active/Cancel"] = "Active"
 
     merged["Payment Type"] = merged.apply(payment_method, axis=1)
     merged["Note"] = merged["ASI Arrival Remark"].fillna("")
@@ -635,21 +761,40 @@ def build_master(
     merged["Business Source Filled From SiteMinder"] = ""
     merged.loc[source_from_siteminder, "Business Source Fix Status"] = "blank_source_set_from_siteminder"
     merged.loc[source_from_siteminder, "Business Source Filled From SiteMinder"] = siteminder_source_fill[source_from_siteminder]
-    merged["Active/Cancel Source"] = "SiteMinder Active"
-    merged.loc[siteminder_cancel, "Active/Cancel Source"] = "SiteMinder Cancel"
-    merged.loc[cancel_conflict & has_arrival, "Active/Cancel Source"] = "SiteMinder Cancel overridden by exact Arrival match"
-    merged.loc[cancel_conflict & ~has_arrival & has_similar_arrival, "Active/Cancel Source"] = "SiteMinder Cancel overridden by similar Arrival candidate"
-    merged.loc[no_siteminder_exact_arrival, "Active/Cancel Source"] = "No SiteMinder match; exact Arrival match"
-    merged.loc[no_siteminder_similar_arrival, "Active/Cancel Source"] = "No SiteMinder match; similar Arrival candidate"
-    merged.loc[no_siteminder_default_active, "Active/Cancel Source"] = "No SiteMinder match; conservative default Active"
+    if batch_folio_enabled:
+        merged["Active/Cancel Source"] = "Batch Folio active"
+        merged.loc[batch_folio_cancel, "Active/Cancel Source"] = "Batch Folio missing; treated as cancelled"
+        merged.loc[batch_missing_siteminder_active_conflict, "Active/Cancel Source"] = (
+            "Batch Folio missing but SiteMinder active"
+        )
+    else:
+        merged["Active/Cancel Source"] = "SiteMinder Active"
+        merged.loc[siteminder_cancel, "Active/Cancel Source"] = "SiteMinder Cancel"
+        merged.loc[cancel_conflict & has_arrival, "Active/Cancel Source"] = "SiteMinder Cancel overridden by exact Arrival match"
+        merged.loc[cancel_conflict & ~has_arrival & has_similar_arrival, "Active/Cancel Source"] = "SiteMinder Cancel overridden by similar Arrival candidate"
+        merged.loc[no_siteminder_exact_arrival, "Active/Cancel Source"] = "No SiteMinder match; exact Arrival match"
+        merged.loc[no_siteminder_similar_arrival, "Active/Cancel Source"] = "No SiteMinder match; similar Arrival candidate"
+        merged.loc[no_siteminder_default_active, "Active/Cancel Source"] = "No SiteMinder match; conservative default Active"
     merged["Status Needs Review"] = "No"
-    review_rows = cancel_conflict | no_siteminder
+    review_rows = (
+        (batch_missing_siteminder_active_conflict | batch_active_siteminder_cancel_conflict)
+        if batch_folio_enabled
+        else (cancel_conflict | no_siteminder)
+    )
     merged.loc[review_rows, "Status Needs Review"] = "Yes"
     merged["Status Review Reason"] = ""
-    merged.loc[cancel_conflict, "Status Review Reason"] = "SiteMinder says Cancel but Arrival List has an exact or similar same-date candidate; defaulted to Active."
-    merged.loc[no_siteminder_exact_arrival, "Status Review Reason"] = "No SiteMinder match; exact Arrival List match exists; defaulted to Active."
-    merged.loc[no_siteminder_similar_arrival, "Status Review Reason"] = "No SiteMinder match; similar same-date Arrival candidate exists; defaulted to Active."
-    merged.loc[no_siteminder_default_active, "Status Review Reason"] = "No SiteMinder match and no strong Arrival candidate; conservative default is Active."
+    if batch_folio_enabled:
+        merged.loc[batch_missing_siteminder_active_conflict, "Status Review Reason"] = (
+            "Batch Folio does not contain this Folio No. but SiteMinder says Active; kept Active for manual review."
+        )
+        merged.loc[batch_active_siteminder_cancel_conflict, "Status Review Reason"] = (
+            "Batch Folio contains this Folio No. but SiteMinder says Cancel; kept Active for manual review."
+        )
+    else:
+        merged.loc[cancel_conflict, "Status Review Reason"] = "SiteMinder says Cancel but Arrival List has an exact or similar same-date candidate; defaulted to Active."
+        merged.loc[no_siteminder_exact_arrival, "Status Review Reason"] = "No SiteMinder match; exact Arrival List match exists; defaulted to Active."
+        merged.loc[no_siteminder_similar_arrival, "Status Review Reason"] = "No SiteMinder match; similar same-date Arrival candidate exists; defaulted to Active."
+        merged.loc[no_siteminder_default_active, "Status Review Reason"] = "No SiteMinder match and no strong Arrival candidate; conservative default is Active."
     blank_name_review = review_rows & merged["_master_guest_name_exact"].fillna("").eq("")
     merged.loc[blank_name_review, "Status Review Reason"] = (
         merged.loc[blank_name_review, "Status Review Reason"] + " Master guest name is blank, so Arrival name matching is unreliable."
@@ -671,22 +816,31 @@ def build_master(
     merged.loc[asi_booking_report_cancel, "Status Needs Review"] = "No"
     merged.loc[asi_booking_report_cancel, "Status Review Reason"] = ""
 
-    if len(merged) != master_original_rows:
-        raise RuntimeError(f"Output row count changed from {master_original_rows} to {len(merged)}")
+    expected_enriched_rows = master_original_rows
+    if len(merged) != expected_enriched_rows:
+        raise RuntimeError(f"Enriched row count changed from {expected_enriched_rows} to {len(merged)}")
     if not merged["_Absolute Master Row #"].is_unique:
         raise RuntimeError("Internal absolute master row number is no longer unique")
 
     output = merged[master_columns + ["Payment Type", "Note", "Active/Cancel"]].copy()
     output = output.fillna("")
 
+    if len(output) != master_original_rows:
+        raise RuntimeError(f"Output row count changed from {master_original_rows} to {len(output)}")
+
     summary = {
         "master_file": str(master_file),
         "arrival_file": str(arrival_file),
         "expedia_file": str(expedia_file),
         "asi_booking_report_file": str(asi_booking_report_file) if asi_booking_report_file else "",
-        "siteminder_files": [str(p) for p in (siteminder_files or sorted(TABLES_DIR.glob("reservations_summary_report*.csv")))],
+        "batch_folio_file": str(batch_folio_file) if batch_folio_file else "",
+        "siteminder_files": [str(p) for p in (siteminder_files if siteminder_files is not None else default_siteminder_files())],
         "master_rows_input": master_original_rows,
         "master_rows_output": int(len(output)),
+        "master_rows_after_batch_folio_filter": int(has_batch_folio.sum()) if batch_folio_enabled else master_original_rows,
+        "batch_folio_rows": int(len(batch_folio)),
+        "batch_folio_unmatched_folio_numbers": int(batch_folio_unmatched_count),
+        "batch_folio_cancelled_rows": int(batch_folio_cancel.sum()) if batch_folio_enabled else 0,
         "arrival_rows_raw": int(len(arrival_raw)),
         "arrival_exact_name_date_rows_matched": int(has_arrival.sum()),
         "arrival_exact_name_date_rows_with_remark": int(
@@ -704,6 +858,9 @@ def build_master(
         "active_cancel_blank_after_conservative_status": int(output["Active/Cancel"].eq("").sum()),
         "status_needs_review_rows": int(merged["Status Needs Review"].eq("Yes").sum()),
         "siteminder_cancel_overridden_by_arrival_signal": int(cancel_conflict.sum()),
+        "batch_folio_active_but_siteminder_cancel_rows": int(batch_active_siteminder_cancel_conflict.sum()),
+        "batch_folio_missing_but_siteminder_active_rows": int(batch_missing_siteminder_active_conflict.sum()),
+        "batch_folio_cancelled_but_siteminder_active_rows": int(batch_missing_siteminder_active_conflict.sum()),
         "business_source_blank_filled_from_siteminder": int(source_from_siteminder.sum()),
         "business_source_blank_set_to_ctrip_from_siteminder": int(ctrip_from_siteminder.sum()),
         "expedia_rows": int(is_expedia.sum()),
@@ -735,6 +892,7 @@ def write_outputs(output: pd.DataFrame, summary: dict[str, Any], audit: pd.DataF
     status_needs_review_path = out_dir / "audit_status_needs_review.csv"
     source_filled_path = out_dir / "audit_business_source_filled_from_siteminder.csv"
     asi_booking_report_cancelled_path = out_dir / "audit_asi_booking_report_cancelled.csv"
+    batch_folio_siteminder_conflicts_path = out_dir / "audit_batch_folio_siteminder_conflicts.csv"
 
     active_output = output[output["Active/Cancel"].ne("Cancel")].copy()
     cancelled_output = output[output["Active/Cancel"].eq("Cancel")].copy()
@@ -744,6 +902,7 @@ def write_outputs(output: pd.DataFrame, summary: dict[str, Any], audit: pd.DataF
         "First Name",
         "Last Name",
         "Business Source",
+        "Folio No.",
         "CRS Folio #",
         "Date In",
         "Date Out",
@@ -753,7 +912,9 @@ def write_outputs(output: pd.DataFrame, summary: dict[str, Any], audit: pd.DataF
         "Active/Cancel",
         "Active/Cancel Source",
         "Status Review Reason",
+        "Batch Folio Match Status",
         "SM Booking reference",
+        "SM Active/Cancel",
         "SM Statuses",
         "SM Channels",
         "ASI Arrival Match Count",
@@ -771,6 +932,12 @@ def write_outputs(output: pd.DataFrame, summary: dict[str, Any], audit: pd.DataF
     summary["cancelled_booking_rows"] = int(len(cancelled_output))
     summary["total_rows_across_active_and_cancelled_files"] = int(len(active_output) + len(cancelled_output))
     summary["status_review_excel_rows"] = int(len(status_review))
+    summary["active_import_payment_type_counts"] = active_output["Payment Type"].value_counts(dropna=False).to_dict()
+    summary["payment_type_counts"] = summary["active_import_payment_type_counts"]
+    summary["active_import_unmapped_payment_source_counts"] = active_output.loc[
+        active_output["Payment Type"].eq(""), "Business Source"
+    ].value_counts(dropna=False).to_dict()
+    summary["business_source_unmapped_payment_counts"] = summary["active_import_unmapped_payment_source_counts"]
 
     active_output.to_csv(csv_path, index=False, quoting=csv.QUOTE_MINIMAL)
     cancelled_output.to_csv(cancelled_csv_path, index=False, quoting=csv.QUOTE_MINIMAL)
@@ -814,6 +981,10 @@ def write_outputs(output: pd.DataFrame, summary: dict[str, Any], audit: pd.DataF
     audit[audit["ASI Booking Report Active/Cancel"].eq("Cancel")].to_csv(
         asi_booking_report_cancelled_path, index=False
     )
+    audit[
+        audit["Status Review Reason"].str.contains("Batch Folio", na=False)
+        & audit["SM Active/Cancel"].fillna("").ne("")
+    ].to_csv(batch_folio_siteminder_conflicts_path, index=False)
 
 
 def main() -> None:
@@ -822,15 +993,19 @@ def main() -> None:
     parser.add_argument("--master-file", type=Path, default=MASTER_FILE)
     parser.add_argument("--arrival-file", type=Path, default=ARRIVAL_FILE)
     parser.add_argument("--expedia-file", type=Path, default=EXPEDIA_FILE)
+    parser.add_argument("--batch-folio-file", type=Path, default=BATCH_FOLIO_FILE)
+    parser.add_argument("--no-batch-folio", action="store_true")
     parser.add_argument("--asi-booking-report-file", type=Path, default=None)
     parser.add_argument("--siteminder-file", type=Path, action="append", dest="siteminder_files")
+    parser.add_argument("--no-siteminder", action="store_true")
     args = parser.parse_args()
     output, summary, audit = build_master(
         master_file=args.master_file,
         arrival_file=args.arrival_file,
         expedia_file=args.expedia_file,
-        siteminder_files=args.siteminder_files,
+        siteminder_files=[] if args.no_siteminder else args.siteminder_files,
         asi_booking_report_file=args.asi_booking_report_file,
+        batch_folio_file=None if args.no_batch_folio else args.batch_folio_file,
     )
     write_outputs(output, summary, audit, args.output_dir)
     print(json.dumps(summary, indent=2, ensure_ascii=False))

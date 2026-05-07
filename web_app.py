@@ -60,8 +60,6 @@ def save_siteminder_files(run_upload_dir: Path) -> list[Path]:
         path = run_upload_dir / filename
         file.save(path)
         paths.append(path)
-    if not paths:
-        raise ValueError("Missing required upload: siteminder_files")
     return paths
 
 
@@ -95,6 +93,7 @@ def process_uploads():
 
     try:
         master_file = save_required_file(run_upload_dir, "master_file")
+        batch_folio_file = save_required_file(run_upload_dir, "batch_folio_file")
         arrival_file = save_required_file(run_upload_dir, "arrival_file")
         expedia_file = save_required_file(run_upload_dir, "expedia_file")
         asi_booking_report_file = save_optional_file(run_upload_dir, "asi_booking_report_file")
@@ -106,6 +105,7 @@ def process_uploads():
             expedia_file=expedia_file,
             siteminder_files=siteminder_files,
             asi_booking_report_file=asi_booking_report_file,
+            batch_folio_file=batch_folio_file,
         )
         write_outputs(output, summary, audit, run_output_dir)
         make_zip(run_id, run_output_dir)
