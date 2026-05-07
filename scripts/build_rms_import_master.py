@@ -5,7 +5,9 @@ import argparse
 import csv
 import json
 import re
+from collections import defaultdict
 from datetime import date, datetime
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
@@ -188,15 +190,40 @@ def normalize_source(source: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def normalize_name(name: str) -> str:
+    text = clean_line(name).upper()
+    text = re.sub(r"[^A-Z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def name_similarity(left: str, right: str) -> int:
+    left_norm = normalize_name(left)
+    right_norm = normalize_name(right)
+    if not left_norm or not right_norm:
+        return 0
+    if left_norm == right_norm:
+        return 100
+    left_tokens = set(left_norm.split())
+    right_tokens = set(right_norm.split())
+    if len(left_tokens) >= 2 and left_tokens.issubset(right_tokens):
+        return 95
+    if len(right_tokens) >= 2 and right_tokens.issubset(left_tokens):
+        return 95
+    return int(round(SequenceMatcher(None, left_norm, right_norm).ratio() * 100))
+
+
 def payment_method(row: pd.Series) -> str:
     source = normalize_source(row.get("Business Source", ""))
     expedia_payment_type = clean_line(row.get("Expedia Payment Type", ""))
 
-    prepaid_sources = {"agoda", "ctrip", "airbnbxml"}
+    prepaid_sources = {"agoda", "ctrip", "airbnbxml", "airbnb"}
     vcc_sources = {
         "hotelbeds",
         "hopper",
         "jetstar hooroo qantas",
+        "qantas jetstar hotels",
+        "qantas jetstar hotels holidays",
+        "qantas jetstar hotels holidays new",
         "restel",
         "traveloka",
         "webbeds destinations of the world",
@@ -230,11 +257,92 @@ def is_ctrip_siteminder(row: pd.Series) -> bool:
     return any(token in text for token in ["ctrip", "trip com"])
 
 
+def canonical_source_from_siteminder(row: pd.Series) -> str:
+    raw = clean_line(row.get("SM Channels", "")) or clean_line(row.get("SM Affiliated Channels", ""))
+    text = normalize_source(
+        " ".join(
+            [
+                clean_line(row.get("SM Channels", "")),
+                clean_line(row.get("SM Affiliated Channels", "")),
+            ]
+        )
+    )
+    if not text:
+        return ""
+    if any(token in text for token in ["ctrip", "trip com"]):
+        return "Ctrip"
+    if "booking com" in text:
+        return "Booking.com"
+    if "agoda" in text:
+        return "Agoda"
+    if "expedia" in text:
+        return "Expedia"
+    if "hotelbeds" in text:
+        return "Hotelbeds"
+    if "airbnb" in text:
+        return "AirBnBXML"
+    if "traveloka" in text:
+        return "Traveloka"
+    if "hopper" in text:
+        return "Hopper"
+    if "webbeds" in text or "destinations of the world" in text:
+        return "WebBeds - Destinations of the World"
+    if "qantas" in text or "jetstar" in text or "hooroo" in text:
+        return "Jetstar / Hooroo / Qantas"
+    return raw
+
+
 def siteminder_match_key(row: pd.Series) -> str:
     crs_folio = clean_line(row.get("CRS Folio #", ""))
     if normalize_source(row.get("Business Source", "")) == "hotelbeds" and "-" in crs_folio:
         return crs_folio.split("-", 1)[1].strip()
     return crs_folio
+
+
+def add_arrival_candidate_fields(merged: pd.DataFrame, arrival_raw: pd.DataFrame) -> pd.DataFrame:
+    merged = merged.copy()
+    defaults = {
+        "Arrival Same Date Candidate Count": 0,
+        "Arrival Similar Candidate Name": "",
+        "Arrival Similar Candidate Score": 0,
+        "Arrival Similar Candidate Row": "",
+        "Arrival Similar Candidate Room": "",
+        "Arrival Similar Candidate Remark": "",
+    }
+    if arrival_raw.empty:
+        for col, value in defaults.items():
+            merged[col] = value
+        return merged
+
+    by_dates: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for rec in arrival_raw.to_dict("records"):
+        by_dates[(rec["arrival_checkin_date"], rec["arrival_checkout_date"])].append(rec)
+
+    candidate_rows = []
+    for rec in merged.to_dict("records"):
+        same_date = by_dates.get((rec.get("_checkin_date", ""), rec.get("_checkout_date", "")), [])
+        guest_name = rec.get("_master_guest_name_exact", "")
+        best: dict[str, Any] | None = None
+        best_score = 0
+        for candidate in same_date:
+            score = name_similarity(guest_name, candidate.get("arrival_guest_name_exact", ""))
+            if score > best_score:
+                best_score = score
+                best = candidate
+        candidate_rows.append(
+            {
+                "Arrival Same Date Candidate Count": len(same_date),
+                "Arrival Similar Candidate Name": best.get("arrival_guest_name_exact", "") if best else "",
+                "Arrival Similar Candidate Score": best_score,
+                "Arrival Similar Candidate Row": best.get("arrival_source_row", "") if best else "",
+                "Arrival Similar Candidate Room": best.get("arrival_room", "") if best else "",
+                "Arrival Similar Candidate Remark": best.get("arrival_remark", "") if best else "",
+            }
+        )
+    candidate_df = pd.DataFrame(candidate_rows, index=merged.index)
+    for col in candidate_df.columns:
+        merged[col] = candidate_df[col]
+    return merged
 
 
 def build_master(
@@ -255,6 +363,7 @@ def build_master(
         right_on=["arrival_guest_name_exact", "arrival_checkin_date", "arrival_checkout_date"],
         validate="many_to_one",
     )
+    merged = add_arrival_candidate_fields(merged, arrival_raw)
 
     sm = read_siteminder(siteminder_files)
     if not sm.empty:
@@ -276,16 +385,25 @@ def build_master(
         validate="many_to_one",
     )
     original_source_norm = merged["Business Source"].map(normalize_source)
-    fallback_allowed = original_source_norm.isin(["", "asi", "mobile", "anand systems booking engine"])
     source_was_blank = merged["Business Source"].fillna("").map(clean_line).eq("")
-    ctrip_from_siteminder = source_was_blank & merged.apply(is_ctrip_siteminder, axis=1)
-    merged.loc[ctrip_from_siteminder, "Business Source"] = "Ctrip"
+    siteminder_source_fill = merged.apply(canonical_source_from_siteminder, axis=1)
+    source_from_siteminder = source_was_blank & siteminder_source_fill.ne("")
+    ctrip_from_siteminder = source_from_siteminder & siteminder_source_fill.eq("Ctrip")
+    merged.loc[source_from_siteminder, "Business Source"] = siteminder_source_fill[source_from_siteminder]
 
     has_arrival = merged["ASI Arrival Match Count"].notna()
-    missing_siteminder_status = merged["Active/Cancel"].fillna("").eq("")
-    fallback_rows = missing_siteminder_status & fallback_allowed
-    merged.loc[fallback_rows & has_arrival, "Active/Cancel"] = "Active"
-    merged.loc[fallback_rows & ~has_arrival, "Active/Cancel"] = "Cancel"
+    has_similar_arrival = (~has_arrival) & merged["Arrival Similar Candidate Score"].fillna(0).astype(int).ge(88)
+    has_arrival_signal = has_arrival | has_similar_arrival
+    has_siteminder = merged.get("SM Booking reference", pd.Series("", index=merged.index)).fillna("").ne("")
+    siteminder_cancel = has_siteminder & merged["Active/Cancel"].fillna("").eq("Cancel")
+    no_siteminder = ~has_siteminder
+    cancel_conflict = siteminder_cancel & has_arrival_signal
+    no_siteminder_exact_arrival = no_siteminder & has_arrival
+    no_siteminder_similar_arrival = no_siteminder & ~has_arrival & has_similar_arrival
+    no_siteminder_default_active = no_siteminder & ~has_arrival_signal
+
+    merged.loc[cancel_conflict, "Active/Cancel"] = "Active"
+    merged.loc[no_siteminder, "Active/Cancel"] = "Active"
 
     merged["Payment Type"] = merged.apply(payment_method, axis=1)
     merged["Note"] = merged["ASI Arrival Remark"].fillna("")
@@ -301,17 +419,35 @@ def build_master(
     )
     merged["SiteMinder Merge Status"] = "not_matched"
     merged.loc[merged.get("SM Booking reference", pd.Series("", index=merged.index)).fillna("").ne(""), "SiteMinder Merge Status"] = (
-        "matched_active_not_cancelled"
+        "matched_siteminder"
     )
     merged["Expedia Payment Match Status"] = ""
     is_expedia = merged["Business Source"].map(normalize_source).eq("expedia")
     merged.loc[is_expedia, "Expedia Payment Match Status"] = "not_matched"
     merged.loc[is_expedia & merged["Expedia Payment Type"].fillna("").ne(""), "Expedia Payment Match Status"] = "matched"
     merged["Business Source Fix Status"] = ""
-    merged.loc[ctrip_from_siteminder, "Business Source Fix Status"] = "blank_source_set_to_ctrip_from_siteminder"
-    merged["Active/Cancel Source"] = "No SiteMinder match; fallback not applicable"
-    merged.loc[fallback_rows, "Active/Cancel Source"] = "Arrival List fallback"
-    merged.loc[merged.get("SM Booking reference", pd.Series("", index=merged.index)).fillna("").ne(""), "Active/Cancel Source"] = "SiteMinder"
+    merged["Business Source Filled From SiteMinder"] = ""
+    merged.loc[source_from_siteminder, "Business Source Fix Status"] = "blank_source_set_from_siteminder"
+    merged.loc[source_from_siteminder, "Business Source Filled From SiteMinder"] = siteminder_source_fill[source_from_siteminder]
+    merged["Active/Cancel Source"] = "SiteMinder Active"
+    merged.loc[siteminder_cancel, "Active/Cancel Source"] = "SiteMinder Cancel"
+    merged.loc[cancel_conflict & has_arrival, "Active/Cancel Source"] = "SiteMinder Cancel overridden by exact Arrival match"
+    merged.loc[cancel_conflict & ~has_arrival & has_similar_arrival, "Active/Cancel Source"] = "SiteMinder Cancel overridden by similar Arrival candidate"
+    merged.loc[no_siteminder_exact_arrival, "Active/Cancel Source"] = "No SiteMinder match; exact Arrival match"
+    merged.loc[no_siteminder_similar_arrival, "Active/Cancel Source"] = "No SiteMinder match; similar Arrival candidate"
+    merged.loc[no_siteminder_default_active, "Active/Cancel Source"] = "No SiteMinder match; conservative default Active"
+    merged["Status Needs Review"] = "No"
+    review_rows = cancel_conflict | no_siteminder
+    merged.loc[review_rows, "Status Needs Review"] = "Yes"
+    merged["Status Review Reason"] = ""
+    merged.loc[cancel_conflict, "Status Review Reason"] = "SiteMinder says Cancel but Arrival List has an exact or similar same-date candidate; defaulted to Active."
+    merged.loc[no_siteminder_exact_arrival, "Status Review Reason"] = "No SiteMinder match; exact Arrival List match exists; defaulted to Active."
+    merged.loc[no_siteminder_similar_arrival, "Status Review Reason"] = "No SiteMinder match; similar same-date Arrival candidate exists; defaulted to Active."
+    merged.loc[no_siteminder_default_active, "Status Review Reason"] = "No SiteMinder match and no strong Arrival candidate; conservative default is Active."
+    blank_name_review = review_rows & merged["_master_guest_name_exact"].fillna("").eq("")
+    merged.loc[blank_name_review, "Status Review Reason"] = (
+        merged.loc[blank_name_review, "Status Review Reason"] + " Master guest name is blank, so Arrival name matching is unreliable."
+    )
 
     if len(merged) != master_original_rows:
         raise RuntimeError(f"Output row count changed from {master_original_rows} to {len(merged)}")
@@ -339,7 +475,10 @@ def build_master(
         ),
         "active_cancel_counts": output["Active/Cancel"].value_counts(dropna=False).to_dict(),
         "active_cancel_source_counts": merged["Active/Cancel Source"].value_counts(dropna=False).to_dict(),
-        "active_cancel_blank_after_restricted_fallback": int(output["Active/Cancel"].eq("").sum()),
+        "active_cancel_blank_after_conservative_status": int(output["Active/Cancel"].eq("").sum()),
+        "status_needs_review_rows": int(merged["Status Needs Review"].eq("Yes").sum()),
+        "siteminder_cancel_overridden_by_arrival_signal": int(cancel_conflict.sum()),
+        "business_source_blank_filled_from_siteminder": int(source_from_siteminder.sum()),
         "business_source_blank_set_to_ctrip_from_siteminder": int(ctrip_from_siteminder.sum()),
         "expedia_rows": int(is_expedia.sum()),
         "expedia_payment_rows_matched": int(merged["Expedia Payment Match Status"].eq("matched").sum()),
@@ -363,13 +502,47 @@ def write_outputs(output: pd.DataFrame, summary: dict[str, Any], audit: pd.DataF
     active_cancel_unmatched_path = out_dir / "audit_active_cancel_unmatched.csv"
     active_cancel_fallback_path = out_dir / "audit_active_cancel_arrival_fallback.csv"
     ctrip_source_fixed_path = out_dir / "audit_business_source_ctrip_fixed.csv"
+    status_needs_review_path = out_dir / "audit_status_needs_review.csv"
+    source_filled_path = out_dir / "audit_business_source_filled_from_siteminder.csv"
 
     output.to_csv(csv_path, index=False, quoting=csv.QUOTE_MINIMAL)
+    status_review = audit[audit["Status Needs Review"].eq("Yes")].copy()
+    review_columns = [
+        "_Absolute Master Row #",
+        "First Name",
+        "Last Name",
+        "Business Source",
+        "CRS Folio #",
+        "Date In",
+        "Date Out",
+        "Room Type",
+        "Room",
+        "Payment Type",
+        "Active/Cancel",
+        "Active/Cancel Source",
+        "Status Review Reason",
+        "SM Booking reference",
+        "SM Statuses",
+        "SM Channels",
+        "ASI Arrival Match Count",
+        "ASI Arrival Rooms",
+        "ASI Arrival Source Rows",
+        "Arrival Similar Candidate Name",
+        "Arrival Similar Candidate Score",
+        "Arrival Similar Candidate Row",
+        "Arrival Similar Candidate Room",
+        "Arrival Similar Candidate Remark",
+    ]
+    status_review = status_review[[c for c in review_columns if c in status_review.columns]]
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
         output.to_excel(writer, index=False, sheet_name="RMS Import Master")
+        status_review.to_excel(writer, index=False, sheet_name="Status Review")
         ws = writer.book["RMS Import Master"]
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = ws.dimensions
+        review_ws = writer.book["Status Review"]
+        review_ws.freeze_panes = "A2"
+        review_ws.auto_filter.ref = review_ws.dimensions
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
 
     audit[audit["Payment Type"].eq("")].to_csv(blank_payment_path, index=False)
@@ -379,10 +552,14 @@ def write_outputs(output: pd.DataFrame, summary: dict[str, Any], audit: pd.DataF
     ].to_csv(expedia_unmatched_path, index=False)
     audit[audit["ASI Arrival Remark Match Status"].eq("not_matched")].to_csv(arrival_no_match_path, index=False)
     audit[audit["Active/Cancel"].eq("")].to_csv(active_cancel_unmatched_path, index=False)
-    audit[audit["Active/Cancel Source"].eq("Arrival List fallback")].to_csv(active_cancel_fallback_path, index=False)
-    audit[audit["Business Source Fix Status"].eq("blank_source_set_to_ctrip_from_siteminder")].to_csv(
+    audit[audit["Active/Cancel Source"].str.contains("Arrival", na=False)].to_csv(active_cancel_fallback_path, index=False)
+    audit[audit["Business Source Fix Status"].eq("blank_source_set_from_siteminder")].to_csv(
+        source_filled_path, index=False
+    )
+    audit[audit["Business Source Filled From SiteMinder"].eq("Ctrip")].to_csv(
         ctrip_source_fixed_path, index=False
     )
+    audit[audit["Status Needs Review"].eq("Yes")].to_csv(status_needs_review_path, index=False)
 
 
 def main() -> None:

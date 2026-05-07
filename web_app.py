@@ -65,6 +65,8 @@ def make_zip(run_id: str, out_dir: Path) -> Path:
         "audit_active_cancel_unmatched.csv",
         "audit_active_cancel_arrival_fallback.csv",
         "audit_business_source_ctrip_fixed.csv",
+        "audit_business_source_filled_from_siteminder.csv",
+        "audit_status_needs_review.csv",
     ]
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for name in names:

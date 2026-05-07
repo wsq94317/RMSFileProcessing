@@ -61,18 +61,21 @@ Outputs are written to `outputs/rms_import/`:
 - `audit_payment_type_blank.csv`: rows where the requested source rules leave `Payment Type` blank.
 - `audit_expedia_payment_unmatched.csv`: Expedia rows whose `CRS Folio #` did not match `reservationsList.csv`.
 - `audit_arrival_remark_not_matched.csv`: master rows where Arrival Remark was not added because exact name/date matching failed.
-- `audit_active_cancel_unmatched.csv`: rows where `Active/Cancel` is still blank because SiteMinder did not match and Arrival List fallback was not allowed for that source.
-- `audit_active_cancel_arrival_fallback.csv`: ASI/Anand Systems Booking Engine/Mobile/blank-source rows where SiteMinder did not match and `Active/Cancel` was decided by Arrival List.
-- `audit_business_source_ctrip_fixed.csv`: rows where blank `Business Source` was set to `Ctrip` from SiteMinder channel data.
+- `audit_active_cancel_unmatched.csv`: rows where `Active/Cancel` is still blank; this should normally be empty under conservative status mode.
+- `audit_active_cancel_arrival_fallback.csv`: rows where Arrival List exact or similar matching affected `Active/Cancel`.
+- `audit_status_needs_review.csv`: conservative-default or conflict rows that should be manually checked after migration.
+- `audit_business_source_filled_from_siteminder.csv`: rows where blank `Business Source` was filled from SiteMinder channel data.
+- `audit_business_source_ctrip_fixed.csv`: rows where blank `Business Source` was specifically set to `Ctrip` from SiteMinder channel data.
 
 Rules:
 
 - The absolute master row count must stay unchanged; the script stops if the output row count differs.
 - `Note` is copied from ASI Arrival Remark only when `First Name + Last Name`, check-in date, and check-out date exactly match the ASI Arrival Report.
-- `Active/Cancel` is checked against all SiteMinder rows by `CRS Folio # = Booking reference`; cancelled bookings become `Cancel`, booked/modified bookings become `Active`.
+- `Active/Cancel` is checked against all SiteMinder rows by `CRS Folio # = Booking reference`; booked/modified bookings become `Active`.
 - For Hotelbeds only, SiteMinder matching removes the property ID before the first hyphen in `CRS Folio #`; for example `667707-1111-11111` matches SiteMinder `1111-11111`.
-- If SiteMinder does not match, `Active/Cancel` falls back to Arrival List exact matching only for `ASI`, `Anand Systems Booking Engine`, `Mobile`, or blank `Business Source`: present in Arrival List = `Active`, otherwise `Cancel`.
-- If master `Business Source` is blank but `CRS Folio #` matches SiteMinder and the SiteMinder channel is Ctrip/Trip.com, the output `Business Source` is set to `Ctrip`.
+- Conservative status mode: only SiteMinder can prove `Cancel`, and SiteMinder `Cancel` is overridden to `Active` if Arrival List has an exact or highly similar same-date candidate.
+- If SiteMinder does not match, `Active/Cancel` defaults to `Active` and the row is written to `audit_status_needs_review.csv`.
+- If master `Business Source` is blank but `CRS Folio #` matches SiteMinder, the output `Business Source` is filled from SiteMinder channel data where possible. Trip.com/Ctrip is normalized to `Ctrip`.
 - Expedia `Payment Type` is based on `CRS Folio # = Reservation ID` in `tables/new/reservationsList.csv`.
 - `Payment Type` mapping: Agoda/Ctrip/AirBnBXML = `Prepaid`; Hotelbeds/Hopper/Jetstar-Hooroo-Qantas/Restel/Traveloka/WebBeds = `VCC`; Anand Systems Booking Engine/Booking.com/Mobile = `POA`; Expedia uses the Expedia payment type file.
 
