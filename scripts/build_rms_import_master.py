@@ -230,6 +230,13 @@ def is_ctrip_siteminder(row: pd.Series) -> bool:
     return any(token in text for token in ["ctrip", "trip com"])
 
 
+def siteminder_match_key(row: pd.Series) -> str:
+    crs_folio = clean_line(row.get("CRS Folio #", ""))
+    if normalize_source(row.get("Business Source", "")) == "hotelbeds" and "-" in crs_folio:
+        return crs_folio.split("-", 1)[1].strip()
+    return crs_folio
+
+
 def build_master(
     master_file: Path = MASTER_FILE,
     arrival_file: Path = ARRIVAL_FILE,
@@ -251,10 +258,11 @@ def build_master(
 
     sm = read_siteminder(siteminder_files)
     if not sm.empty:
+        merged["_siteminder_match_key"] = merged.apply(siteminder_match_key, axis=1)
         merged = merged.merge(
             sm,
             how="left",
-            left_on="CRS Folio #",
+            left_on="_siteminder_match_key",
             right_on="SM Booking reference",
             validate="many_to_one",
         )
@@ -268,7 +276,7 @@ def build_master(
         validate="many_to_one",
     )
     original_source_norm = merged["Business Source"].map(normalize_source)
-    fallback_allowed = original_source_norm.isin(["", "asi", "mobile"])
+    fallback_allowed = original_source_norm.isin(["", "asi", "mobile", "anand systems booking engine"])
     source_was_blank = merged["Business Source"].fillna("").map(clean_line).eq("")
     ctrip_from_siteminder = source_was_blank & merged.apply(is_ctrip_siteminder, axis=1)
     merged.loc[ctrip_from_siteminder, "Business Source"] = "Ctrip"
@@ -326,6 +334,9 @@ def build_master(
             (has_arrival & merged["ASI Arrival Remark"].fillna("").ne("")).sum()
         ),
         "siteminder_booking_refs": int(len(sm)),
+        "hotelbeds_rows_with_trimmed_siteminder_match_key": int(
+            (original_source_norm.eq("hotelbeds") & merged.get("_siteminder_match_key", pd.Series("", index=merged.index)).ne(merged["CRS Folio #"])).sum()
+        ),
         "active_cancel_counts": output["Active/Cancel"].value_counts(dropna=False).to_dict(),
         "active_cancel_source_counts": merged["Active/Cancel Source"].value_counts(dropna=False).to_dict(),
         "active_cancel_blank_after_restricted_fallback": int(output["Active/Cancel"].eq("").sum()),
